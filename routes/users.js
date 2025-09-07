@@ -1,29 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateJWT, authorizeRoles } = require('../middleware/auth');
+const User = require('../models/User');
 
 // Get user profile
 router.get('/profile', authenticateJWT, async (req, res) => {
   try {
     // TODO: Implement user profile retrieval
-    const userProfile = {
-      id: req.user._id,
-      name: 'John Doe',
-      email: 'john@example.com',
-      role: 'developer',
-      department: 'Engineering',
-      avatar: 'https://example.com/avatar.jpg',
-      bio: 'Full-stack developer with 5 years of experience',
-      skills: ['JavaScript', 'React', 'Node.js', 'Python'],
-      location: 'New York',
-      timezone: 'America/New_York',
-      joinDate: '2023-01-15',
-      lastActive: new Date().toISOString()
-    };
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
     
     res.json({
       message: 'User profile retrieved successfully',
-      profile: userProfile
+      profile: user
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch user profile', error: err.message });
