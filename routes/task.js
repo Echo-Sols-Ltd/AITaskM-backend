@@ -77,36 +77,48 @@ router.get('/', authenticateJWT, async (req, res) => {
 // GET /api/tasks/:id - Get specific task by ID
 router.get('/:id', authenticateJWT, async (req, res) => {
   try {
+    console.log('Fetching task with ID:', req.params.id);
+    
     const task = await Task.findById(req.params.id)
       .populate('assignedTo', 'name email avatar')
       .populate('assignedBy', 'name email')
       .populate('project', 'name code description')
       .populate('team', 'name')
+      .populate('department', 'name')
       .populate('dependencies')
       .populate('subtasks')
       .populate('comments.user', 'name avatar');
 
     if (!task) {
+      console.log('Task not found with ID:', req.params.id);
       return res.status(404).json({ message: 'Task not found' });
     }
 
+    console.log('Task found:', task.title);
+
     // Check if user has access to this task
     if (req.user.role !== 'admin' && req.user.role !== 'manager') {
-      if (task.assignedTo.toString() !== req.user._id.toString() && 
-          task.createdBy.toString() !== req.user._id.toString() && 
+      const taskAssignedTo = task.assignedTo ? task.assignedTo._id || task.assignedTo : null;
+      const taskCreatedBy = task.assignedBy ? task.assignedBy._id || task.assignedBy : null;
+      
+      if (taskAssignedTo && taskAssignedTo.toString() !== req.user._id.toString() && 
+          taskCreatedBy && taskCreatedBy.toString() !== req.user._id.toString() && 
           !task.isPublic) {
+        console.log('Access denied for user:', req.user._id);
         return res.status(403).json({ message: 'Access denied' });
       }
     }
 
+    console.log('Sending task response');
     res.json(task);
   } catch (err) {
+    console.error('Error fetching task:', err);
     res.status(500).json({ message: 'Failed to fetch task', error: err.message });
   }
 });
 
 // POST /api/tasks - Create new task
-router.post('/', authenticateJWT, authorizeRoles('admin', 'manager', 'team_lead'), validateTask, handleValidation, async (req, res) => {
+router.post('/', authenticateJWT, validateTask, handleValidation, async (req, res) => {
   try {
     const {
       title,
@@ -125,7 +137,7 @@ router.post('/', authenticateJWT, authorizeRoles('admin', 'manager', 'team_lead'
     const task = new Task({
       title,
       description,
-      assignedTo,
+      assignedTo: assignedTo || req.user._id, // Assign to self if no assignee specified
       assignedBy: req.user._id,
       project,
       team,

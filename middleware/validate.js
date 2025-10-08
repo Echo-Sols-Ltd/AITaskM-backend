@@ -15,7 +15,7 @@ const validateLogin = [
 const validateTask = [
   body('title').trim().notEmpty().withMessage('Title is required.'),
   body('assignedTo').optional().isMongoId().withMessage('assignedTo must be a valid user ID.'),
-  body('priority').optional().isIn(['low', 'medium', 'high']),
+  body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
   body('deadline').optional().isISO8601().toDate(),
 ];
 
