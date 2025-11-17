@@ -5,6 +5,7 @@ const User = require('../models/User');
 const Project = require('../models/Project');
 const { authenticateJWT, authorizeRoles } = require('../middleware/auth');
 const { validateTask, handleValidation } = require('../middleware/validate');
+const { emitTaskUpdate, emitNotification, emitToUser, emitToTeam } = require('../socket');
 
 // GET /api/tasks - Get all tasks with filtering and pagination
 router.get('/', authenticateJWT, async (req, res) => {
@@ -145,10 +146,18 @@ router.post('/', authenticateJWT, authorizeRoles('admin', 'manager', 'team_lead'
     await task.populate('project', 'name code');
     await task.populate('team', 'name');
 
-    // Emit real-time update
-    if (req.io) {
-      req.io.to(`user-${assignedTo}`).emit('task-assigned', task);
-      if (team) req.io.to(`team-${team}`).emit('task-created', task);
+    // Emit real-time updates
+    if (assignedTo) {
+      emitToUser(assignedTo, 'task-created', task);
+      emitNotification(assignedTo, {
+        title: 'New Task Assigned',
+        message: `You have been assigned: ${title}`,
+        type: 'info',
+        actionUrl: `/tasks/${task._id}`
+      });
+    }
+    if (team) {
+      emitToTeam(team, 'task-created', task);
     }
 
     res.status(201).json(task);
@@ -181,10 +190,15 @@ router.put('/:id', authenticateJWT, async (req, res) => {
      .populate('project', 'name code')
      .populate('team', 'name');
 
-    // Emit real-time update
-    if (req.io) {
-      req.io.to(`user-${updatedTask.assignedTo._id}`).emit('task-updated', updatedTask);
-      if (updatedTask.team) req.io.to(`team-${updatedTask.team._id}`).emit('task-updated', updatedTask);
+    // Emit real-time updates
+    emitTaskUpdate(updatedTask);
+    if (updatedTask.assignedTo) {
+      emitNotification(updatedTask.assignedTo._id, {
+        title: 'Task Updated',
+        message: `Task "${updatedTask.title}" has been updated`,
+        type: 'info',
+        actionUrl: `/tasks/${updatedTask._id}`
+      });
     }
 
     res.json(updatedTask);
