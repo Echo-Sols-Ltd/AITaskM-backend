@@ -15,8 +15,11 @@ const validateLogin = [
 const validateTask = [
   body('title').trim().notEmpty().withMessage('Title is required.'),
   body('assignedTo').optional().isMongoId().withMessage('assignedTo must be a valid user ID.'),
-  body('priority').optional().isIn(['low', 'medium', 'high']),
+  body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']).withMessage('Priority must be low, medium, high, or urgent.'),
+  body('status').optional().isIn(['pending', 'in_progress', 'completed', 'overdue', 'blocked', 'cancelled']).withMessage('Invalid status.'),
   body('deadline').optional().isISO8601().toDate(),
+  body('estimatedHours').optional().isNumeric().withMessage('Estimated hours must be a number.'),
+  body('progress').optional().isInt({ min: 0, max: 100 }).withMessage('Progress must be between 0 and 100.'),
 ];
 
 const validateKPI = [
