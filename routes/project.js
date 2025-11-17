@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const Project = require('../models/Project');
-const { authenticateToken, authorizeRoles } = require('../middleware/auth');
+const { authenticateJWT, authorizeRoles } = require('../middleware/auth');
 
 // Get all projects
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateJWT, async (req, res) => {
   try {
     const { status, priority, manager, search } = req.query;
     
@@ -48,7 +48,7 @@ router.get('/', authenticateToken, async (req, res) => {
 });
 
 // Get project by ID
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/:id', authenticateJWT, async (req, res) => {
   try {
     const project = await Project.findById(req.params.id)
       .populate('manager', 'name email role')
@@ -69,7 +69,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // Create new project
-router.post('/', authenticateToken, authorizeRoles('admin', 'manager'), async (req, res) => {
+router.post('/', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
   try {
     const projectData = {
       ...req.body,
@@ -92,7 +92,7 @@ router.post('/', authenticateToken, authorizeRoles('admin', 'manager'), async (r
 });
 
 // Update project
-router.put('/:id', authenticateToken, authorizeRoles('admin', 'manager'), async (req, res) => {
+router.put('/:id', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
   try {
     const project = await Project.findByIdAndUpdate(
       req.params.id,
@@ -116,7 +116,7 @@ router.put('/:id', authenticateToken, authorizeRoles('admin', 'manager'), async 
 });
 
 // Delete project (soft delete)
-router.delete('/:id', authenticateToken, authorizeRoles('admin', 'manager'), async (req, res) => {
+router.delete('/:id', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
   try {
     const project = await Project.findByIdAndUpdate(
       req.params.id,
@@ -136,7 +136,7 @@ router.delete('/:id', authenticateToken, authorizeRoles('admin', 'manager'), asy
 });
 
 // Add milestone to project
-router.post('/:id/milestones', authenticateToken, authorizeRoles('admin', 'manager'), async (req, res) => {
+router.post('/:id/milestones', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
   try {
     const project = await Project.findById(req.params.id);
     
@@ -155,7 +155,7 @@ router.post('/:id/milestones', authenticateToken, authorizeRoles('admin', 'manag
 });
 
 // Update milestone
-router.put('/:id/milestones/:milestoneId', authenticateToken, authorizeRoles('admin', 'manager'), async (req, res) => {
+router.put('/:id/milestones/:milestoneId', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
   try {
     const project = await Project.findById(req.params.id);
     
@@ -179,7 +179,7 @@ router.put('/:id/milestones/:milestoneId', authenticateToken, authorizeRoles('ad
 });
 
 // Get project statistics
-router.get('/:id/stats', authenticateToken, async (req, res) => {
+router.get('/:id/stats', authenticateJWT, async (req, res) => {
   try {
     const project = await Project.findById(req.params.id).populate('tasks');
     
