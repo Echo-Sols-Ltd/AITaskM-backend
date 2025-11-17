@@ -73,7 +73,7 @@ router.post('/', authenticateJWT, authorizeRoles('admin', 'manager'), async (req
   try {
     const projectData = {
       ...req.body,
-      manager: req.body.manager || req.user.userId
+      manager: req.body.manager || req.user._id
     };
     
     const project = new Project(projectData);
