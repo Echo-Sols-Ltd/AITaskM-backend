@@ -335,8 +335,7 @@ router.post('/custom', auth, async (req, res) => {
 
 module.exports = router; 
 
-// Ex
-port analytics report
+// Export analytics report
 router.post('/analytics', auth, async (req, res) => {
   try {
     const { format = 'pdf', startDate, endDate } = req.body;

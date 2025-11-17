@@ -5,6 +5,10 @@ const User = require('../models/User');
 const Task = require('../models/Task');
 const { authenticateJWT, authorizeRoles } = require('../middleware/auth');
 
+// ============================================
+// TEAM MEMBERS OPERATIONS (must come before /:id routes)
+// ============================================
+
 // GET /api/team/members - Get all team members
 router.get('/members', authenticateJWT, async (req, res) => {
   try {
@@ -869,6 +873,141 @@ router.get('/debug', authenticateJWT, authorizeRoles('admin', 'manager'), async 
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch debug data', error: err.message });
+  }
+});
+
+// ============================================
+// TEAM CRUD OPERATIONS
+// ============================================
+
+// GET /api/team - Get all teams (must be after /members routes)
+router.get('/', authenticateJWT, async (req, res) => {
+  try {
+    const teams = await Team.find({ isActive: true })
+      .populate('manager', 'name email')
+      .populate('lead', 'name email')
+      .populate('members', 'name email avatar')
+      .sort({ createdAt: -1 });
+
+    res.json({ teams });
+  } catch (err) {
+    console.error('Error fetching teams:', err);
+    res.status(500).json({ message: 'Failed to fetch teams', error: err.message });
+  }
+});
+
+// POST /api/team - Create new team
+router.post('/', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
+  try {
+    const { name, description, members, lead } = req.body;
+
+    // Validate required fields
+    if (!name) {
+      return res.status(400).json({ message: 'Team name is required' });
+    }
+
+    // Create team with the current user as manager
+    const team = new Team({
+      name,
+      description,
+      manager: req.user._id,
+      members: members || [],
+      lead: lead || req.user._id,
+      isActive: true
+    });
+
+    await team.save();
+
+    // Populate the team data
+    await team.populate('manager', 'name email');
+    await team.populate('lead', 'name email');
+    await team.populate('members', 'name email avatar');
+
+    res.status(201).json({ team, message: 'Team created successfully' });
+  } catch (err) {
+    console.error('Error creating team:', err);
+    res.status(500).json({ message: 'Failed to create team', error: err.message });
+  }
+});
+
+// GET /api/team/:id - Get team by ID
+router.get('/:id', authenticateJWT, async (req, res) => {
+  try {
+    const team = await Team.findById(req.params.id)
+      .populate('manager', 'name email')
+      .populate('lead', 'name email')
+      .populate('members', 'name email avatar role');
+
+    if (!team) {
+      return res.status(404).json({ message: 'Team not found' });
+    }
+
+    res.json({ team });
+  } catch (err) {
+    console.error('Error fetching team:', err);
+    res.status(500).json({ message: 'Failed to fetch team', error: err.message });
+  }
+});
+
+// PUT /api/team/:id - Update team
+router.put('/:id', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
+  try {
+    const { name, description, members, lead, isActive } = req.body;
+
+    const team = await Team.findById(req.params.id);
+
+    if (!team) {
+      return res.status(404).json({ message: 'Team not found' });
+    }
+
+    // Check if user is authorized to update this team
+    if (req.user.role !== 'admin' && team.manager.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to update this team' });
+    }
+
+    // Update fields
+    if (name) team.name = name;
+    if (description !== undefined) team.description = description;
+    if (members) team.members = members;
+    if (lead) team.lead = lead;
+    if (isActive !== undefined) team.isActive = isActive;
+
+    await team.save();
+
+    // Populate the team data
+    await team.populate('manager', 'name email');
+    await team.populate('lead', 'name email');
+    await team.populate('members', 'name email avatar');
+
+    res.json({ team, message: 'Team updated successfully' });
+  } catch (err) {
+    console.error('Error updating team:', err);
+    res.status(500).json({ message: 'Failed to update team', error: err.message });
+  }
+});
+
+// DELETE /api/team/:id - Delete team (soft delete)
+router.delete('/:id', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
+  try {
+    const team = await Team.findById(req.params.id);
+
+    if (!team) {
+      return res.status(404).json({ message: 'Team not found' });
+    }
+
+    // Check if user is authorized to delete this team
+    if (req.user.role !== 'admin' && team.manager.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to delete this team' });
+    }
+
+    // Soft delete
+    team.isActive = false;
+    await team.save();
+
+    res.json({ message: 'Team deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting team:', err);
+    res.status(500).json({ message: 'Failed to delete team', error: err.message });
   }
 });
 
