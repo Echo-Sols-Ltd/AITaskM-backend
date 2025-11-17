@@ -5,6 +5,7 @@ const Task = require('../models/Task');
 const User = require('../models/User');
 const KPI = require('../models/KPI');
 const Goal = require('../models/Goal');
+const ExportUtils = require('../utils/exportUtils');
 
 /**
  * @route   POST /api/export/tasks
@@ -333,3 +334,140 @@ router.post('/custom', auth, async (req, res) => {
 });
 
 module.exports = router; 
+
+// Ex
+port analytics report
+router.post('/analytics', auth, async (req, res) => {
+  try {
+    const { format = 'pdf', startDate, endDate } = req.body;
+    
+    // Fetch analytics data
+    const filter = {};
+    if (startDate && endDate) {
+      filter.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate)
+      };
+    }
+
+    const totalTasks = await Task.countDocuments(filter);
+    const completedTasks = await Task.countDocuments({ ...filter, status: 'completed' });
+    const inProgressTasks = await Task.countDocuments({ ...filter, status: 'in-progress' });
+    const pendingTasks = await Task.countDocuments({ ...filter, status: 'pending' });
+    const completionRate = totalTasks > 0 ? ((completedTasks / totalTasks) * 100).toFixed(1) : 0;
+
+    const overview = {
+      'Total Tasks': totalTasks,
+      'Completed Tasks': completedTasks,
+      'In Progress': inProgressTasks,
+      'Pending Tasks': pendingTasks,
+      'Completion Rate': `${completionRate}%`
+    };
+
+    const tasks = await Task.find(filter)
+      .populate('assignedTo', 'name email')
+      .lean();
+
+    const formattedTasks = ExportUtils.formatTasksForExport(tasks);
+
+    let buffer;
+    let contentType;
+    let filename;
+
+    switch (format.toLowerCase()) {
+      case 'pdf':
+        buffer = await ExportUtils.exportToPDF(formattedTasks, {
+          title: 'Analytics Report',
+          overview
+        });
+        contentType = 'application/pdf';
+        filename = `analytics_report_${Date.now()}.pdf`;
+        break;
+
+      case 'excel':
+        buffer = await ExportUtils.exportToExcel(formattedTasks, {
+          title: 'Analytics Report',
+          sheetName: 'Analytics'
+        });
+        contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        filename = `analytics_report_${Date.now()}.xlsx`;
+        break;
+
+      case 'csv':
+        buffer = await ExportUtils.exportToCSV(formattedTasks);
+        contentType = 'text/csv';
+        filename = `analytics_report_${Date.now()}.csv`;
+        break;
+
+      default:
+        return res.status(400).json({ message: 'Invalid format' });
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+
+  } catch (error) {
+    console.error('Export error:', error);
+    res.status(500).json({ message: 'Export failed', error: error.message });
+  }
+});
+
+// Export tasks report
+router.post('/tasks-report', auth, async (req, res) => {
+  try {
+    const { format = 'pdf', filters = {} } = req.body;
+    
+    const query = {};
+    if (filters.status) query.status = filters.status;
+    if (filters.priority) query.priority = filters.priority;
+    if (filters.assignedTo) query.assignedTo = filters.assignedTo;
+
+    const tasks = await Task.find(query)
+      .populate('assignedTo', 'name email')
+      .populate('project', 'name')
+      .lean();
+
+    const formattedTasks = ExportUtils.formatTasksForExport(tasks);
+
+    let buffer;
+    let contentType;
+    let filename;
+
+    switch (format.toLowerCase()) {
+      case 'pdf':
+        buffer = await ExportUtils.exportToPDF(formattedTasks, {
+          title: 'Tasks Report'
+        });
+        contentType = 'application/pdf';
+        filename = `tasks_report_${Date.now()}.pdf`;
+        break;
+
+      case 'excel':
+        buffer = await ExportUtils.exportToExcel(formattedTasks, {
+          title: 'Tasks Report',
+          sheetName: 'Tasks'
+        });
+        contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        filename = `tasks_report_${Date.now()}.xlsx`;
+        break;
+
+      case 'csv':
+        buffer = await ExportUtils.exportToCSV(formattedTasks);
+        contentType = 'text/csv';
+        filename = `tasks_report_${Date.now()}.csv`;
+        break;
+
+      default:
+        return res.status(400).json({ message: 'Invalid format' });
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+
+  } catch (error) {
+    console.error('Export error:', error);
+    res.status(500).json({ message: 'Export failed', error: error.message });
+  }
+});
