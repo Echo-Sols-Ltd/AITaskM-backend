@@ -4,7 +4,7 @@ const validateRegistration = [
   body('name').trim().notEmpty().withMessage('Name is required.'),
   body('email').isEmail().withMessage('Valid email is required.').normalizeEmail(),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters.'),
-  body('role').isIn(['employer', 'employee']).withMessage('Role must be employer or employee.'),
+  body('role').isIn(['admin', 'manager', 'employee', 'viewer']).withMessage('Role must be admin, manager, employee, or viewer.'),
 ];
 
 const validateLogin = [
