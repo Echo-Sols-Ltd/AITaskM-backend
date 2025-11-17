@@ -1,19 +1,42 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateJWT, authorizeRoles } = require('../middleware/auth');
+const Task = require('../models/Task');
+const User = require('../models/User');
 
 // AI Task Assignment
-router.post('/assign-tasks', authenticateJWT, authorizeRoles('employer', 'manager'), async (req, res) => {
+router.post('/assign-tasks', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
   try {
-    // TODO: Implement AI logic for task assignment
     const { tasks, teamMembers, criteria } = req.body;
     
-    // Placeholder for AI assignment logic
-    const assignments = tasks.map(task => ({
-      taskId: task.id,
-      assignedTo: teamMembers[Math.floor(Math.random() * teamMembers.length)].id,
-      reason: 'AI optimized assignment based on skills and availability'
-    }));
+    // Simple AI logic: Assign based on current workload
+    const memberWorkload = {};
+    
+    // Calculate current workload for each member
+    for (const member of teamMembers) {
+      const activeTasks = await Task.countDocuments({
+        assignedTo: member.id,
+        status: { $in: ['pending', 'in-progress'] }
+      });
+      memberWorkload[member.id] = activeTasks;
+    }
+    
+    // Assign tasks to members with lowest workload
+    const assignments = tasks.map(task => {
+      // Find member with lowest workload
+      const assignedMember = teamMembers.reduce((prev, curr) => 
+        memberWorkload[curr.id] < memberWorkload[prev.id] ? curr : prev
+      );
+      
+      // Increment workload for next assignment
+      memberWorkload[assignedMember.id]++;
+      
+      return {
+        taskId: task.id,
+        assignedTo: assignedMember.id,
+        reason: `Assigned based on workload balance (${memberWorkload[assignedMember.id] - 1} active tasks)`
+      };
+    });
     
     res.json({ 
       message: 'AI task assignment completed',
@@ -58,25 +81,76 @@ router.post('/optimize-schedule', authenticateJWT, authorizeRoles('employer', 'm
 router.get('/suggestions', authenticateJWT, async (req, res) => {
   try {
     const { userId, context } = req.query;
+    const targetUserId = userId || req.user._id;
     
-    // Placeholder for AI suggestions
-    const suggestions = [
-      {
-        type: 'productivity',
-        message: 'Consider using the Pomodoro technique for better focus',
-        priority: 'medium'
-      },
-      {
+    // Get user's tasks
+    const userTasks = await Task.find({
+      assignedTo: targetUserId,
+      status: { $in: ['pending', 'in-progress'] }
+    }).sort({ deadline: 1 });
+    
+    const suggestions = [];
+    
+    // Check for overdue tasks
+    const overdueTasks = userTasks.filter(task => 
+      task.deadline && new Date(task.deadline) < new Date()
+    );
+    if (overdueTasks.length > 0) {
+      suggestions.push({
         type: 'task_management',
-        message: 'You have 3 high-priority tasks due today. Consider delegating one.',
+        message: `You have ${overdueTasks.length} overdue task${overdueTasks.length > 1 ? 's' : ''}. Consider prioritizing them or requesting deadline extensions.`,
         priority: 'high'
-      },
-      {
-        type: 'skill_development',
-        message: 'Based on your recent tasks, you might benefit from learning about project management.',
-        priority: 'low'
+      });
+    }
+    
+    // Check for high-priority tasks
+    const highPriorityTasks = userTasks.filter(task => 
+      task.priority === 'high' || task.priority === 'urgent'
+    );
+    if (highPriorityTasks.length > 3) {
+      suggestions.push({
+        type: 'task_management',
+        message: `You have ${highPriorityTasks.length} high-priority tasks. Consider delegating some or breaking them into smaller tasks.`,
+        priority: 'high'
+      });
+    }
+    
+    // Check task completion rate
+    const completedTasks = await Task.countDocuments({
+      assignedTo: targetUserId,
+      status: 'completed',
+      createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+    });
+    const totalTasks = await Task.countDocuments({
+      assignedTo: targetUserId,
+      createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+    });
+    
+    if (totalTasks > 0) {
+      const completionRate = completedTasks / totalTasks;
+      if (completionRate < 0.5) {
+        suggestions.push({
+          type: 'productivity',
+          message: 'Your task completion rate is below 50% this week. Consider using time-blocking or the Pomodoro technique.',
+          priority: 'medium'
+        });
+      } else if (completionRate > 0.8) {
+        suggestions.push({
+          type: 'productivity',
+          message: 'Great job! Your completion rate is above 80%. Keep up the excellent work!',
+          priority: 'low'
+        });
       }
-    ];
+    }
+    
+    // General productivity tip
+    if (suggestions.length === 0) {
+      suggestions.push({
+        type: 'productivity',
+        message: 'Consider reviewing your tasks at the start of each day to prioritize effectively.',
+        priority: 'low'
+      });
+    }
     
     res.json({
       message: 'AI suggestions retrieved',
