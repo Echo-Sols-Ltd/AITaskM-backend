@@ -61,7 +61,7 @@ router.get('/conversations/:id', authenticateJWT, async (req, res) => {
     const conversation = await Conversation.findById(req.params.id)
       .populate('participants', 'name email role avatar')
       .populate('lastMessage')
-      .populate('admins', 'name email role')
+      .populate('admins', 'name email role avatar')
       .populate('metadata.project', 'name')
       .populate('metadata.team', 'name')
       .populate('metadata.task', 'title');
@@ -81,6 +81,104 @@ router.get('/conversations/:id', authenticateJWT, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch conversation', error: err.message });
+  }
+});
+
+// Update conversation settings
+router.patch('/conversations/:id/settings', authenticateJWT, async (req, res) => {
+  try {
+    const conversation = await Conversation.findById(req.params.id);
+
+    if (!conversation) {
+      return res.status(404).json({ message: 'Conversation not found' });
+    }
+
+    // Check if user is admin
+    if (!conversation.admins.some(admin => admin.toString() === req.user._id.toString())) {
+      return res.status(403).json({ message: 'Only admins can update conversation settings' });
+    }
+
+    // Update settings
+    if (req.body.settings) {
+      conversation.settings = { ...conversation.settings, ...req.body.settings };
+    }
+
+    await conversation.save();
+
+    res.json({
+      success: true,
+      message: 'Conversation settings updated',
+      conversation
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update conversation settings', error: err.message });
+  }
+});
+
+// Add participant to conversation
+router.post('/conversations/:id/participants', authenticateJWT, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const conversation = await Conversation.findById(req.params.id);
+
+    if (!conversation) {
+      return res.status(404).json({ message: 'Conversation not found' });
+    }
+
+    // Check if user is admin
+    if (!conversation.admins.some(admin => admin.toString() === req.user._id.toString())) {
+      return res.status(403).json({ message: 'Only admins can add participants' });
+    }
+
+    // Check if user is already a participant
+    if (conversation.participants.some(p => p.toString() === userId)) {
+      return res.status(400).json({ message: 'User is already a participant' });
+    }
+
+    conversation.participants.push(userId);
+    await conversation.save();
+
+    const updatedConversation = await Conversation.findById(conversation._id)
+      .populate('participants', 'name email role avatar')
+      .populate('admins', 'name email role avatar');
+
+    res.json({
+      success: true,
+      message: 'Participant added successfully',
+      conversation: updatedConversation
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to add participant', error: err.message });
+  }
+});
+
+// Remove participant from conversation
+router.delete('/conversations/:id/participants/:userId', authenticateJWT, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const conversation = await Conversation.findById(req.params.id);
+
+    if (!conversation) {
+      return res.status(404).json({ message: 'Conversation not found' });
+    }
+
+    // Check if user is admin or removing themselves
+    const isAdmin = conversation.admins.some(admin => admin.toString() === req.user._id.toString());
+    const isSelf = userId === req.user._id.toString();
+
+    if (!isAdmin && !isSelf) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    conversation.participants = conversation.participants.filter(p => p.toString() !== userId);
+    await conversation.save();
+
+    res.json({
+      success: true,
+      message: 'Participant removed successfully'
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to remove participant', error: err.message });
   }
 });
 
