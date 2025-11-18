@@ -350,6 +350,87 @@ router.delete('/messages/:id', authenticateJWT, async (req, res) => {
   }
 });
 
+// Mark message as read
+router.post('/messages/:id/read', authenticateJWT, async (req, res) => {
+  try {
+    const chatMessage = await ChatMessage.findById(req.params.id);
+    
+    if (!chatMessage) {
+      return res.status(404).json({ message: 'Message not found' });
+    }
+
+    // Check if already marked as read by this user
+    const alreadyRead = chatMessage.readBy.some(
+      r => r.user.toString() === req.user._id.toString()
+    );
+
+    if (!alreadyRead) {
+      chatMessage.readBy.push({
+        user: req.user._id,
+        readAt: new Date()
+      });
+      await chatMessage.save();
+
+      // Emit real-time read receipt
+      if (req.io) {
+        req.io.to(`chat:${chatMessage.conversation}`).emit('message-read', {
+          messageId: chatMessage._id,
+          userId: req.user._id.toString(),
+          readAt: new Date()
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Message marked as read'
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to mark message as read', error: err.message });
+  }
+});
+
+// Mark all messages in conversation as read
+router.post('/conversations/:id/read', authenticateJWT, async (req, res) => {
+  try {
+    const conversationId = req.params.id;
+    
+    // Find all unread messages in this conversation
+    const unreadMessages = await ChatMessage.find({
+      conversation: conversationId,
+      'readBy.user': { $ne: req.user._id },
+      sender: { $ne: req.user._id }, // Don't mark own messages
+      isDeleted: false
+    });
+
+    // Mark all as read
+    for (const message of unreadMessages) {
+      message.readBy.push({
+        user: req.user._id,
+        readAt: new Date()
+      });
+      await message.save();
+    }
+
+    // Emit real-time read receipts
+    if (req.io && unreadMessages.length > 0) {
+      req.io.to(`chat:${conversationId}`).emit('messages-read', {
+        messageIds: unreadMessages.map(m => m._id.toString()),
+        userId: req.user._id.toString(),
+        readAt: new Date()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Messages marked as read',
+      count: unreadMessages.length
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to mark messages as read', error: err.message });
+  }
+});
+
 // Add reaction to message
 router.post('/messages/:id/reactions', authenticateJWT, async (req, res) => {
   try {
