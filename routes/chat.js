@@ -177,6 +177,7 @@ router.get('/messages/:convId', authenticateJWT, async (req, res) => {
     .populate('sender', 'name email role avatar')
     .populate('replyTo', 'message sender')
     .populate('mentions', 'name email')
+    .populate('reactions.user', 'name email avatar')
     .sort({ createdAt: -1 })
     .limit(limit * 1)
     .skip((page - 1) * limit);
