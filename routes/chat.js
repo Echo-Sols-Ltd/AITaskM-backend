@@ -208,6 +208,10 @@ router.post('/conversations/:id/messages', authenticateJWT, async (req, res) => 
     const { content, type = 'text', replyTo, attachments } = req.body;
     const conversationId = req.params.id;
 
+    if (!content || content.trim() === '') {
+      return res.status(400).json({ message: 'Message content is required' });
+    }
+
     const conversation = await Conversation.findById(conversationId);
     if (!conversation) {
       return res.status(404).json({ message: 'Conversation not found' });
@@ -218,35 +222,37 @@ router.post('/conversations/:id/messages', authenticateJWT, async (req, res) => 
       return res.status(403).json({ message: 'Access denied to this conversation' });
     }
 
-    const message = new ChatMessage({
+    const chatMessage = new ChatMessage({
       conversation: conversationId,
       sender: req.user._id,
-      content,
-      type,
+      message: content, // Model uses 'message' field
+      messageType: type,
       replyTo,
       attachments
     });
 
-    await message.save();
+    await chatMessage.save();
 
     // Update conversation last activity
-    conversation.lastMessage = message._id;
+    conversation.lastMessage = chatMessage._id;
     conversation.lastActivity = new Date();
     await conversation.save();
 
     // Populate sender info for real-time emission
-    await message.populate('sender', 'name email role avatar');
+    await chatMessage.populate('sender', 'name email role avatar');
 
     // Emit real-time message to all conversation participants
     if (req.io) {
-      req.io.to(`chat-${conversationId}`).emit('new-message', message);
+      req.io.to(`chat:${conversationId}`).emit('new-message', chatMessage);
     }
 
     res.status(201).json({
+      success: true,
       message: 'Message sent successfully',
-      message: message
+      data: chatMessage
     });
   } catch (err) {
+    console.error('Error sending message:', err);
     res.status(500).json({ message: 'Failed to send message', error: err.message });
   }
 });
@@ -255,45 +261,45 @@ router.post('/conversations/:id/messages', authenticateJWT, async (req, res) => 
 router.put('/messages/:id', authenticateJWT, async (req, res) => {
   try {
     const { content, attachments } = req.body;
-    const message = await ChatMessage.findById(req.params.id);
+    const chatMessage = await ChatMessage.findById(req.params.id);
     
-    if (!message) {
+    if (!chatMessage) {
       return res.status(404).json({ message: 'Message not found' });
     }
 
     // Check permissions
-    if (message.sender.toString() !== req.user._id.toString()) {
+    if (chatMessage.sender.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Can only edit your own messages' });
     }
 
     // Check if conversation allows editing
-    const conversation = await Conversation.findById(message.conversation);
+    const conversation = await Conversation.findById(chatMessage.conversation);
     if (!conversation || !conversation.settings.allowEditing) {
       return res.status(403).json({ message: 'Editing not allowed in this conversation' });
     }
 
-    const oldContent = message.content;
-    message.content = content;
-    if (attachments) message.attachments = attachments;
-    message.editedAt = new Date();
-    message.isEdited = true;
+    chatMessage.message = content; // Model uses 'message' field
+    if (attachments) chatMessage.attachments = attachments;
+    chatMessage.editedAt = new Date();
+    chatMessage.isEdited = true;
 
-    await message.save();
+    await chatMessage.save();
 
     // Emit real-time update
     if (req.io) {
-      req.io.to(`chat-${message.conversation}`).emit('message-updated', {
-        messageId: message._id,
-        content: message.content,
-        attachments: message.attachments,
-        editedAt: message.editedAt,
+      req.io.to(`chat:${chatMessage.conversation}`).emit('message-updated', {
+        messageId: chatMessage._id,
+        content: chatMessage.message,
+        attachments: chatMessage.attachments,
+        editedAt: chatMessage.editedAt,
         isEdited: true
       });
     }
 
     res.json({
+      success: true,
       message: 'Message updated successfully',
-      message
+      data: chatMessage
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to update message', error: err.message });
@@ -303,34 +309,42 @@ router.put('/messages/:id', authenticateJWT, async (req, res) => {
 // Delete message
 router.delete('/messages/:id', authenticateJWT, async (req, res) => {
   try {
-    const message = await ChatMessage.findById(req.params.id);
+    const chatMessage = await ChatMessage.findById(req.params.id);
     
-    if (!message) {
+    if (!chatMessage) {
       return res.status(404).json({ message: 'Message not found' });
     }
 
     // Check permissions
-    if (message.sender.toString() !== req.user._id.toString()) {
+    if (chatMessage.sender.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Can only delete your own messages' });
     }
 
     // Check if conversation allows deletion
-    const conversation = await Conversation.findById(message.conversation);
+    const conversation = await Conversation.findById(chatMessage.conversation);
     if (!conversation || !conversation.settings.allowDeletion) {
       return res.status(403).json({ message: 'Deletion not allowed in this conversation' });
     }
 
-    const conversationId = message.conversation;
-    await message.deleteOne();
+    const conversationId = chatMessage.conversation;
+    
+    // Soft delete
+    chatMessage.isDeleted = true;
+    chatMessage.deletedAt = new Date();
+    chatMessage.deletedBy = req.user._id;
+    await chatMessage.save();
 
     // Emit real-time deletion
     if (req.io) {
-      req.io.to(`chat-${conversationId}`).emit('message-deleted', {
+      req.io.to(`chat:${conversationId}`).emit('message-deleted', {
         messageId: req.params.id
       });
     }
 
-    res.json({ message: 'Message deleted successfully' });
+    res.json({ 
+      success: true,
+      message: 'Message deleted successfully' 
+    });
   } catch (err) {
     res.status(500).json({ message: 'Failed to delete message', error: err.message });
   }
@@ -340,41 +354,54 @@ router.delete('/messages/:id', authenticateJWT, async (req, res) => {
 router.post('/messages/:id/reactions', authenticateJWT, async (req, res) => {
   try {
     const { emoji, type } = req.body;
-    const message = await ChatMessage.findById(req.params.id);
+    const chatMessage = await ChatMessage.findById(req.params.id);
     
-    if (!message) {
+    if (!chatMessage) {
       return res.status(404).json({ message: 'Message not found' });
     }
 
     // Check if conversation allows reactions
-    const conversation = await Conversation.findById(message.conversation);
-    if (!conversation || !conversation.settings.allowReactions) {
+    const conversation = await Conversation.findById(chatMessage.conversation);
+    if (!conversation || !conversation.settings?.allowReactions === false) {
       return res.status(403).json({ message: 'Reactions not allowed in this conversation' });
     }
 
-    // Remove existing reaction from this user
-    message.reactions = message.reactions.filter(r => r.user.toString() !== req.user._id.toString());
-    
-    // Add new reaction
-    message.reactions.push({
-      user: req.user._id,
-      emoji,
-      type
-    });
+    // Check if user already reacted with this emoji
+    const existingReaction = chatMessage.reactions.find(
+      r => r.user.toString() === req.user._id.toString() && r.emoji === emoji
+    );
 
-    await message.save();
+    if (existingReaction) {
+      // Remove reaction if already exists (toggle)
+      chatMessage.reactions = chatMessage.reactions.filter(
+        r => !(r.user.toString() === req.user._id.toString() && r.emoji === emoji)
+      );
+    } else {
+      // Add new reaction
+      chatMessage.reactions.push({
+        user: req.user._id,
+        emoji
+      });
+    }
+
+    await chatMessage.save();
 
     // Emit real-time reaction update
     if (req.io) {
-      req.io.to(`chat-${message.conversation}`).emit('message-reaction', {
-        messageId: message._id,
-        reactions: message.reactions
+      req.io.to(`chat:${chatMessage.conversation}`).emit('reaction-added', {
+        messageId: chatMessage._id,
+        reaction: {
+          emoji,
+          userId: req.user._id.toString(),
+          userName: req.user.name
+        }
       });
     }
 
     res.json({
-      message: 'Reaction added successfully',
-      reactions: message.reactions
+      success: true,
+      message: 'Reaction updated successfully',
+      reactions: chatMessage.reactions
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to add reaction', error: err.message });
