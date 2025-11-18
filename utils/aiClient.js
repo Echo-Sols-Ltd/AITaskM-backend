@@ -11,7 +11,6 @@ class AIClient {
     this.cache = new Map();
     this.cacheTimeout = 5 * 60 * 1000; // 5 minutes
     
-    // Create axios instance
     this.client = axios.create({
       baseURL: this.baseURL,
       timeout: this.timeout,
@@ -20,71 +19,61 @@ class AIClient {
       }
     });
 
-    // Request interceptor for logging
-    this.client.interceptors.request.use(
-      (config) => {
-        logger.info(`AI Service Request: ${config.method.toUpperCase()} ${config.url}`);
-        return config;
-      },
-      (error) => {
-        logger.error('AI Service Request Error', { error: error.message });
-        return Promise.reject(error);
-      }
-    );
-
-    // Response interceptor for logging
-    this.client.interceptors.response.use(
-      (response) => {
-        logger.info(`AI Service Response: ${response.status} ${response.config.url}`);
-        return response;
-      },
-      (error) => {
-        logger.error('AI Service Response Error', {
-          url: error.config?.url,
-          status: error.response?.status,
-          message: error.message
-        });
-        return Promise.reject(error);
-      }
-    );
-
     logger.info('AI Client initialized', { baseURL: this.baseURL });
   }
 
   /**
-   * Make request with retry logic
+   * Call AI service with retry logic
    */
-  async callWithRetry(endpoint, data, method = 'POST', attempt = 1) {
-    try {
-      const response = await this.client({
-        method,
-        url: endpoint,
-        data: method !== 'GET' ? data : undefined,
-        params: method === 'GET' ? data : undefined
-      });
-      return response.data;
-    } catch (error) {
-      if (attempt < this.retryAttempts && this.isRetryableError(error)) {
-        logger.warn(`Retrying AI service call (attempt ${attempt + 1}/${this.retryAttempts})`, {
-          endpoint,
-          error: error.message
+  async callWithRetry(endpoint, data, method = 'POST') {
+    let lastError;
+    
+    for (let attempt = 1; attempt <= this.retryAttempts; attempt++) {
+      try {
+        logger.debug(`AI Service call attempt ${attempt}/${this.retryAttempts}`, { endpoint });
+        
+        const response = await this.client.request({
+          method,
+          url: endpoint,
+          data: method !== 'GET' ? data : undefined,
+          params: method === 'GET' ? data : undefined
         });
-        await this.delay(1000 * attempt); // Exponential backoff
-        return this.callWithRetry(endpoint, data, method, attempt + 1);
+        
+        logger.info('AI Service call successful', { endpoint, status: response.status });
+        return response.data;
+      } catch (error) {
+        lastError = error;
+        logger.warn(`AI Service call failed (attempt ${attempt}/${this.retryAttempts})`, {
+          endpoint,
+          error: error.message,
+          status: error.response?.status
+        });
+        
+        if (attempt < this.retryAttempts) {
+          await this.delay(1000 * attempt); // Exponential backoff
+        }
       }
-      throw error;
     }
+    
+    logger.error('AI Service call failed after all retries', {
+      endpoint,
+      error: lastError.message
+    });
+    throw lastError;
   }
 
   /**
-   * Check if error is retryable
+   * Get cache key for request
    */
-  isRetryableError(error) {
-    return (
-      !error.response || // Network error
-      error.response.status >= 500 || // Server error
-      error.code === 'ECONNABORTED' // Timeout
-    );
+  getCacheKey(operation, ...args) {
+    return `${operation}:${JSON.stringify(args)}`;
+  }
+
+  /**
+   * Check if cache is valid
+   */
+  isCacheValid(cacheEntry) {
+    return cacheEntry && (Date.now() - cacheEntry.timestamp) < this.cacheTimeout;
   }
 
   /**
@@ -95,63 +84,16 @@ class AIClient {
   }
 
   /**
-   * Generate cache key
-   */
-  getCacheKey(operation, ...args) {
-    return `${operation}:${JSON.stringify(args)}`;
-  }
-
-  /**
-   * Get from cache
-   */
-  getFromCache(key) {
-    const cached = this.cache.get(key);
-    if (cached && Date.now() - cached.timestamp < this.cacheTimeout) {
-      logger.debug('Cache hit', { key });
-      return cached.data;
-    }
-    if (cached) {
-      this.cache.delete(key);
-    }
-    return null;
-  }
-
-  /**
-   * Set cache
-   */
-  setCache(key, data) {
-    this.cache.set(key, {
-      data,
-      timestamp: Date.now()
-    });
-  }
-
-  /**
-   * Clear cache
-   */
-  clearCache() {
-    this.cache.clear();
-    logger.info('AI Client cache cleared');
-  }
-
-  /**
-   * Health check
+   * Health check for AI service
    */
   async healthCheck() {
     try {
       const response = await this.client.get('/api/ai/healthcheck');
-      return {
-        status: 'ok',
-        aiService: response.data,
-        connected: true
-      };
+      logger.info('AI Service health check passed', response.data);
+      return { healthy: true, ...response.data };
     } catch (error) {
       logger.error('AI Service health check failed', { error: error.message });
-      return {
-        status: 'error',
-        connected: false,
-        error: error.message
-      };
+      return { healthy: false, error: error.message };
     }
   }
 
@@ -159,23 +101,46 @@ class AIClient {
    * AI-powered task assignment
    */
   async assignTasks(tasks, employees, criteria = {}) {
-    const cacheKey = this.getCacheKey('assign-tasks', tasks, employees);
-    const cached = this.getFromCache(cacheKey);
-    if (cached) return cached;
+    const cacheKey = this.getCacheKey('assign', tasks, employees);
+    const cached = this.cache.get(cacheKey);
+    
+    if (this.isCacheValid(cached)) {
+      logger.debug('Returning cached AI assignment result');
+      return cached.data;
+    }
 
     try {
-      logger.info('Calling AI service for task assignment', {
-        taskCount: tasks.length,
-        employeeCount: employees.length
-      });
-
-      const result = await this.callWithRetry('/api/ai/assign-tasks', {
-        tasks,
-        employees,
+      const payload = {
+        tasks: tasks.map(task => ({
+          task_id: task._id || task.id,
+          title: task.title,
+          priority: task.priority,
+          estimated_hours: task.estimatedHours || 8,
+          deadline: task.deadline,
+          required_skills: task.tags || [],
+          task_type: task.category || 'general'
+        })),
+        employees: employees.map(emp => ({
+          id: emp._id || emp.id,
+          name: emp.name,
+          role: emp.role || emp.position,
+          current_tasks: emp.currentTasks || 0,
+          historical_completion_rate: emp.completionRate || 0.8,
+          average_completion_time_hours: emp.avgCompletionTime || 8,
+          skills: emp.skills || [],
+          department: emp.department
+        })),
         criteria
+      };
+
+      const result = await this.callWithRetry('/api/ai/assign-tasks', payload);
+      
+      // Cache the result
+      this.cache.set(cacheKey, {
+        data: result,
+        timestamp: Date.now()
       });
 
-      this.setCache(cacheKey, result);
       return result;
     } catch (error) {
       logger.error('AI task assignment failed, using fallback', { error: error.message });
@@ -184,25 +149,40 @@ class AIClient {
   }
 
   /**
-   * Fallback assignment logic (when AI service is unavailable)
+   * Fallback assignment logic when AI service is unavailable
    */
   fallbackAssignment(tasks, employees) {
     logger.warn('Using fallback assignment logic');
     
-    // Sort employees by current workload
-    const sortedEmployees = [...employees].sort((a, b) => 
-      (a.current_tasks || 0) - (b.current_tasks || 0)
-    );
+    const assignments = [];
+    const employeeWorkload = {};
+    
+    employees.forEach(emp => {
+      employeeWorkload[emp._id || emp.id] = emp.currentTasks || 0;
+    });
 
-    const assignments = tasks.map((task, index) => {
-      const employee = sortedEmployees[index % sortedEmployees.length];
-      return {
-        task_id: task.task_id || task._id || task.id,
-        assigned_to: employee.id || employee._id,
-        reason: 'Assigned based on workload balance (fallback mode)',
-        confidence: 0.5,
-        fallback: true
-      };
+    tasks.forEach(task => {
+      const availableEmployees = employees.filter(emp => 
+        !emp.maxTasks || employeeWorkload[emp._id || emp.id] < emp.maxTasks
+      );
+
+      if (availableEmployees.length === 0) {
+        logger.warn('No available employees for task', { taskId: task._id || task.id });
+        return;
+      }
+
+      const assignedEmployee = availableEmployees.reduce((prev, curr) => 
+        employeeWorkload[curr._id || curr.id] < employeeWorkload[prev._id || prev.id] ? curr : prev
+      );
+
+      assignments.push({
+        task_id: task._id || task.id,
+        assigned_to: assignedEmployee._id || assignedEmployee.id,
+        reason: `Assigned based on workload balance (${employeeWorkload[assignedEmployee._id || assignedEmployee.id]} active tasks)`,
+        confidence: 0.6
+      });
+
+      employeeWorkload[assignedEmployee._id || assignedEmployee.id]++;
     });
 
     return { assignments };
@@ -213,61 +193,40 @@ class AIClient {
    */
   async reassignOverdue(overdueTasks, employees) {
     try {
-      logger.info('Calling AI service for overdue task reassignment', {
-        overdueCount: overdueTasks.length,
-        employeeCount: employees.length
-      });
+      const payload = {
+        overdue_tasks: overdueTasks.map(task => ({
+          task_id: task._id || task.id,
+          title: task.title,
+          priority: task.priority,
+          days_overdue: Math.floor((Date.now() - new Date(task.deadline)) / (1000 * 60 * 60 * 24))
+        })),
+        employees: employees.map(emp => ({
+          id: emp._id || emp.id,
+          name: emp.name,
+          current_tasks: emp.currentTasks || 0,
+          historical_completion_rate: emp.completionRate || 0.8
+        }))
+      };
 
-      const result = await this.callWithRetry('/api/ai/reassign-overdue', {
-        overdue_tasks: overdueTasks,
-        employees
-      });
-
-      return result;
+      return await this.callWithRetry('/api/ai/reassign-overdue', payload);
     } catch (error) {
-      logger.error('AI overdue reassignment failed', { error: error.message });
+      logger.error('AI reassignment failed', { error: error.message });
       throw error;
     }
   }
 
   /**
-   * Get performance score for all employees
+   * Get performance score for employee(s)
    */
-  async getPerformanceScores() {
-    const cacheKey = this.getCacheKey('performance-scores');
-    const cached = this.getFromCache(cacheKey);
-    if (cached) return cached;
-
+  async getPerformanceScore(employeeId = null) {
     try {
-      logger.info('Calling AI service for performance scores');
-
-      const result = await this.callWithRetry('/api/ai/performance-score', {}, 'GET');
-
-      this.setCache(cacheKey, result);
-      return result;
+      const endpoint = employeeId 
+        ? `/api/ai/performance-score/${employeeId}`
+        : '/api/ai/performance-score';
+      
+      return await this.callWithRetry(endpoint, {}, 'GET');
     } catch (error) {
-      logger.error('AI performance scores failed', { error: error.message });
-      throw error;
-    }
-  }
-
-  /**
-   * Get performance score for specific employee
-   */
-  async getPerformanceScore(employeeId) {
-    const cacheKey = this.getCacheKey('performance-score', employeeId);
-    const cached = this.getFromCache(cacheKey);
-    if (cached) return cached;
-
-    try {
-      logger.info('Calling AI service for employee performance score', { employeeId });
-
-      const result = await this.callWithRetry(`/api/ai/performance-score/${employeeId}`, {}, 'GET');
-
-      this.setCache(cacheKey, result);
-      return result;
-    } catch (error) {
-      logger.error('AI performance score failed', { error: error.message, employeeId });
+      logger.error('Failed to get performance score', { error: error.message });
       throw error;
     }
   }
@@ -277,13 +236,9 @@ class AIClient {
    */
   async getWeeklyReport() {
     try {
-      logger.info('Calling AI service for weekly report');
-
-      const result = await this.callWithRetry('/api/ai/report/weekly', {}, 'GET');
-
-      return result;
+      return await this.callWithRetry('/api/ai/report/weekly', {}, 'GET');
     } catch (error) {
-      logger.error('AI weekly report failed', { error: error.message });
+      logger.error('Failed to get weekly report', { error: error.message });
       throw error;
     }
   }
@@ -293,13 +248,19 @@ class AIClient {
    */
   async prioritizeTasks(tasks) {
     try {
-      logger.info('Calling AI service for task prioritization', { taskCount: tasks.length });
+      const payload = {
+        tasks: tasks.map(task => ({
+          task_id: task._id || task.id,
+          title: task.title,
+          priority: task.priority,
+          deadline: task.deadline,
+          estimated_hours: task.estimatedHours || 8
+        }))
+      };
 
-      const result = await this.callWithRetry('/api/ai/prioritize', { tasks });
-
-      return result;
+      return await this.callWithRetry('/api/ai/prioritize', payload);
     } catch (error) {
-      logger.error('AI task prioritization failed', { error: error.message });
+      logger.error('AI prioritization failed', { error: error.message });
       throw error;
     }
   }
@@ -307,20 +268,14 @@ class AIClient {
   /**
    * Get AI suggestions for user
    */
-  async getSuggestions(userId, context = '') {
-    const cacheKey = this.getCacheKey('suggestions', userId, context);
-    const cached = this.getFromCache(cacheKey);
-    if (cached) return cached;
-
+  async getSuggestions(userId, context = null) {
     try {
-      logger.info('Calling AI service for suggestions', { userId, context });
-
-      const result = await this.callWithRetry('/api/ai/suggestions', { userId, context }, 'GET');
-
-      this.setCache(cacheKey, result);
-      return result;
+      const params = { userId };
+      if (context) params.context = context;
+      
+      return await this.callWithRetry('/api/ai/suggestions', params, 'GET');
     } catch (error) {
-      logger.error('AI suggestions failed', { error: error.message, userId });
+      logger.error('Failed to get AI suggestions', { error: error.message });
       throw error;
     }
   }
@@ -330,17 +285,10 @@ class AIClient {
    */
   async analyzePerformance(userId, timeframe = 'week', metrics = {}) {
     try {
-      logger.info('Calling AI service for performance analysis', { userId, timeframe });
-
-      const result = await this.callWithRetry('/api/ai/analyze-performance', {
-        userId,
-        timeframe,
-        metrics
-      });
-
-      return result;
+      const payload = { userId, timeframe, metrics };
+      return await this.callWithRetry('/api/ai/analyze-performance', payload);
     } catch (error) {
-      logger.error('AI performance analysis failed', { error: error.message, userId });
+      logger.error('Performance analysis failed', { error: error.message });
       throw error;
     }
   }
@@ -350,29 +298,21 @@ class AIClient {
    */
   async getAnomalies() {
     try {
-      logger.info('Calling AI service for anomaly detection');
-
-      const result = await this.callWithRetry('/api/ai/analytics/anomalies', {}, 'GET');
-
-      return result;
+      return await this.callWithRetry('/api/ai/analytics/anomalies', {}, 'GET');
     } catch (error) {
-      logger.error('AI anomaly detection failed', { error: error.message });
+      logger.error('Failed to get anomalies', { error: error.message });
       throw error;
     }
   }
 
   /**
-   * Get trends
+   * Get performance trends
    */
   async getTrends() {
     try {
-      logger.info('Calling AI service for trend analysis');
-
-      const result = await this.callWithRetry('/api/ai/analytics/trends', {}, 'GET');
-
-      return result;
+      return await this.callWithRetry('/api/ai/analytics/trends', {}, 'GET');
     } catch (error) {
-      logger.error('AI trend analysis failed', { error: error.message });
+      logger.error('Failed to get trends', { error: error.message });
       throw error;
     }
   }
@@ -382,48 +322,69 @@ class AIClient {
    */
   async trainModels() {
     try {
-      logger.info('Calling AI service to train models');
-
-      const result = await this.callWithRetry('/api/ai/test/train', {});
-
-      logger.info('AI model training completed', result);
-      return result;
+      logger.info('Initiating model training');
+      return await this.callWithRetry('/api/ai/test/train', {});
     } catch (error) {
-      logger.error('AI model training failed', { error: error.message });
+      logger.error('Model training failed', { error: error.message });
       throw error;
     }
   }
 
   /**
-   * Get model monitoring metrics
-   */
-  async getModelMetrics() {
-    try {
-      logger.info('Calling AI service for model metrics');
-
-      const result = await this.callWithRetry('/api/ai/monitoring/performance', {}, 'GET');
-
-      return result;
-    } catch (error) {
-      logger.error('AI model metrics failed', { error: error.message });
-      throw error;
-    }
-  }
-
-  /**
-   * Get drift report
+   * Get model drift report
    */
   async getDriftReport() {
     try {
-      logger.info('Calling AI service for drift report');
-
-      const result = await this.callWithRetry('/api/ai/monitoring/drift-report', {}, 'GET');
-
-      return result;
+      return await this.callWithRetry('/api/ai/monitoring/drift-report', {}, 'GET');
     } catch (error) {
-      logger.error('AI drift report failed', { error: error.message });
+      logger.error('Failed to get drift report', { error: error.message });
       throw error;
     }
+  }
+
+  /**
+   * Get model performance metrics
+   */
+  async getModelPerformance() {
+    try {
+      return await this.callWithRetry('/api/ai/monitoring/performance', {}, 'GET');
+    } catch (error) {
+      logger.error('Failed to get model performance', { error: error.message });
+      throw error;
+    }
+  }
+
+  /**
+   * Get model versions
+   */
+  async getModelVersions() {
+    try {
+      return await this.callWithRetry('/api/ai/monitoring/versions', {}, 'GET');
+    } catch (error) {
+      logger.error('Failed to get model versions', { error: error.message });
+      throw error;
+    }
+  }
+
+  /**
+   * Compare model versions
+   */
+  async compareVersions(version1, version2) {
+    try {
+      const params = { version1, version2 };
+      return await this.callWithRetry('/api/ai/monitoring/compare-versions', params, 'GET');
+    } catch (error) {
+      logger.error('Failed to compare versions', { error: error.message });
+      throw error;
+    }
+  }
+
+  /**
+   * Clear cache
+   */
+  clearCache() {
+    this.cache.clear();
+    logger.info('AI Client cache cleared');
   }
 }
 

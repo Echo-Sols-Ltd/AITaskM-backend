@@ -14,104 +14,73 @@ router.post('/assign-tasks', authenticateJWT, authorizeRoles('admin', 'manager')
   try {
     const { tasks, teamMembers, criteria } = req.body;
     
-    logger.info('AI task assignment requested', {
-      taskCount: tasks.length,
-      memberCount: teamMembers.length,
-      requestedBy: req.user._id
+    logger.info('AI task assignment requested', { 
+      taskCount: tasks.length, 
+      memberCount: teamMembers.length 
     });
-
-    // Prepare data for AI service
-    const aiTasks = tasks.map(task => ({
-      task_id: task.id || task._id,
-      title: task.title,
-      priority: task.priority || 'medium',
-      estimated_hours: task.estimatedHours || 8,
-      deadline: task.deadline,
-      task_type: task.type || 'Feature',
-      requirements: task.requirements || []
-    }));
-
-    const aiEmployees = await Promise.all(teamMembers.map(async member => {
-      // Get current workload
+    
+    // Enrich team members with current workload
+    const enrichedMembers = await Promise.all(teamMembers.map(async (member) => {
       const activeTasks = await Task.countDocuments({
         assignedTo: member.id || member._id,
         status: { $in: ['pending', 'in-progress'] }
       });
-
-      // Get completion stats
+      
       const completedTasks = await Task.countDocuments({
         assignedTo: member.id || member._id,
         status: 'completed'
       });
-
+      
       const totalTasks = await Task.countDocuments({
         assignedTo: member.id || member._id
       });
-
-      const completionRate = totalTasks > 0 ? completedTasks / totalTasks : 0;
-
+      
       return {
-        id: member.id || member._id,
-        name: member.name,
-        role: member.role || 'Backend Developer',
-        current_tasks: activeTasks,
-        historical_completion_rate: completionRate,
-        average_completion_time_hours: member.avgCompletionTime || 8,
-        num_overdue_tasks: member.overdueTasks || 0
+        ...member,
+        currentTasks: activeTasks,
+        completionRate: totalTasks > 0 ? completedTasks / totalTasks : 0.8
       };
     }));
-
-    // Call AI service
-    const aiResult = await aiClient.assignTasks(aiTasks, aiEmployees, criteria);
     
-    logger.info('AI assignment completed', {
-      assignmentCount: aiResult.assignments.length,
-      fallback: aiResult.assignments[0]?.fallback || false
-    });
-
-    // Update tasks in database and send notifications
-    for (const assignment of aiResult.assignments) {
-      try {
-        const task = await Task.findById(assignment.task_id);
-        if (task) {
-          task.assignedTo = assignment.assigned_to;
-          task.assignedBy = req.user._id;
-          task.aiAssigned = true;
-          task.aiConfidence = assignment.confidence;
-          task.aiReason = assignment.reason;
-          await task.save();
-
-          // Send real-time notification
-          emitToUser(assignment.assigned_to, 'ai-task-assigned', {
-            task: task,
-            reason: assignment.reason,
-            confidence: assignment.confidence
-          });
-
-          emitNotification(assignment.assigned_to, {
-            title: 'AI Task Assignment',
-            message: `You've been assigned: ${task.title}`,
-            type: 'info',
-            actionUrl: `/tasks/${task._id}`,
-            metadata: {
-              aiAssigned: true,
-              confidence: assignment.confidence
-            }
-          });
-        }
-      } catch (updateError) {
-        logger.error('Failed to update task assignment', {
+    // Call AI service for intelligent assignment
+    const aiResult = await aiClient.assignTasks(tasks, enrichedMembers, criteria);
+    
+    // Update tasks in database with assignments
+    const updatePromises = aiResult.assignments.map(async (assignment) => {
+      const task = await Task.findById(assignment.task_id);
+      if (task) {
+        task.assignedTo = assignment.assigned_to;
+        task.assignedBy = req.user._id;
+        task.aiAssigned = true;
+        task.aiReason = assignment.reason;
+        await task.save();
+        
+        // Emit real-time notification
+        emitToUser(assignment.assigned_to, 'ai-task-assigned', {
           taskId: assignment.task_id,
-          error: updateError.message
+          taskTitle: task.title,
+          reason: assignment.reason
+        });
+        
+        emitNotification(assignment.assigned_to, {
+          title: 'AI Task Assignment',
+          message: `You've been assigned: ${task.title}`,
+          type: 'info',
+          actionUrl: `/tasks/${assignment.task_id}`
         });
       }
-    }
+    });
+    
+    await Promise.all(updatePromises);
+    
+    logger.info('AI task assignment completed', { 
+      assignmentCount: aiResult.assignments.length 
+    });
     
     res.json({ 
       message: 'AI task assignment completed',
       assignments: aiResult.assignments,
-      criteria,
-      aiPowered: !aiResult.assignments[0]?.fallback
+      criteria
     });
   } catch (err) {
     logger.error('AI assignment failed', { error: err.message });
@@ -120,51 +89,37 @@ router.post('/assign-tasks', authenticateJWT, authorizeRoles('admin', 'manager')
 });
 
 // AI Schedule Optimization
-router.post('/optimize-schedule', authenticateJWT, authorizeRoles('employer', 'manager'), async (req, res) => {
+router.post('/optimize-schedule', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
   try {
     const { tasks, constraints, preferences } = req.body;
     
-    logger.info('AI schedule optimization requested', {
-      taskCount: tasks.length,
-      requestedBy: req.user._id
-    });
-
-    // Call AI service for prioritization
-    const aiTasks = tasks.map(task => ({
-      task_id: task.id || task._id,
-      title: task.title,
-      priority: task.priority || 'medium',
-      deadline: task.deadline,
-      estimated_hours: task.estimatedHours || 8
-    }));
-
-    const prioritized = await aiClient.prioritizeTasks(aiTasks);
+    logger.info('AI schedule optimization requested', { taskCount: tasks.length });
     
-    // Create optimized schedule based on AI prioritization
+    // Use AI prioritization as basis for schedule
+    const prioritized = await aiClient.prioritizeTasks(tasks);
+    
+    // Create optimized schedule based on priorities
     const optimizedSchedule = {
       tasks: prioritized.prioritized_tasks.map((task, index) => {
-        const originalTask = tasks.find(t => (t.id || t._id) === task.task_id);
+        const taskData = tasks.find(t => (t.id || t._id) === task.task_id);
         return {
-          ...originalTask,
-          aiPriorityScore: task.priority_score,
+          ...taskData,
           suggestedOrder: index + 1,
-          suggestedStartTime: new Date(Date.now() + (index * 4 * 60 * 60 * 1000)), // 4 hours apart
-          suggestedDuration: originalTask.estimatedHours || 8
+          priorityScore: task.priority_score,
+          suggestedStartTime: new Date(Date.now() + (index * 3600000)), // Stagger by 1 hour
+          suggestedDuration: taskData.estimatedHours || 4
         };
       }),
       totalEfficiency: 0.85,
       recommendations: [
         'Tasks ordered by AI-calculated priority',
-        'Schedule high-priority tasks during peak productivity hours',
-        'Include buffer time between tasks',
-        'Consider dependencies when scheduling'
-      ],
-      aiPowered: true
+        'High-priority tasks scheduled first',
+        'Consider team member availability',
+        'Include buffer time between tasks'
+      ]
     };
     
-    logger.info('Schedule optimization completed', {
-      taskCount: optimizedSchedule.tasks.length
-    });
+    logger.info('Schedule optimization completed');
     
     res.json({
       message: 'Schedule optimization completed',
@@ -182,50 +137,50 @@ router.get('/suggestions', authenticateJWT, async (req, res) => {
     const { userId, context } = req.query;
     const targetUserId = userId || req.user._id;
     
-    logger.info('AI suggestions requested', { userId: targetUserId, context });
-
+    logger.info('AI suggestions requested', { userId: targetUserId });
+    
     // Get basic task data
     const userTasks = await Task.find({
       assignedTo: targetUserId,
       status: { $in: ['pending', 'in-progress'] }
     }).sort({ deadline: 1 });
     
-    const suggestions = [];
-    
-    // Check for overdue tasks
     const overdueTasks = userTasks.filter(task => 
       task.deadline && new Date(task.deadline) < new Date()
     );
-    if (overdueTasks.length > 0) {
-      suggestions.push({
-        type: 'task_management',
-        message: `You have ${overdueTasks.length} overdue task${overdueTasks.length > 1 ? 's' : ''}. Consider prioritizing them or requesting deadline extensions.`,
-        priority: 'high'
-      });
-    }
     
-    // Check for high-priority tasks
-    const highPriorityTasks = userTasks.filter(task => 
-      task.priority === 'high' || task.priority === 'urgent'
-    );
-    if (highPriorityTasks.length > 3) {
-      suggestions.push({
-        type: 'task_management',
-        message: `You have ${highPriorityTasks.length} high-priority tasks. Consider delegating some or breaking them into smaller tasks.`,
-        priority: 'high'
-      });
-    }
-    
-    // Check task completion rate
     const completedTasks = await Task.countDocuments({
       assignedTo: targetUserId,
       status: 'completed',
       createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
     });
+    
     const totalTasks = await Task.countDocuments({
       assignedTo: targetUserId,
       createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
     });
+    
+    // Get AI-powered suggestions
+    let aiSuggestions = [];
+    try {
+      const aiResult = await aiClient.getSuggestions(targetUserId, context);
+      aiSuggestions = aiResult.suggestions || [];
+    } catch (aiError) {
+      logger.warn('AI suggestions unavailable, using fallback', { error: aiError.message });
+    }
+    
+    // Combine with rule-based suggestions
+    const suggestions = [...aiSuggestions];
+    
+    if (overdueTasks.length > 0) {
+      suggestions.push({
+        type: 'task_management',
+        message: `You have ${overdueTasks.length} overdue task${overdueTasks.length > 1 ? 's' : ''}. Consider prioritizing them or requesting deadline extensions.`,
+        priority: 'high',
+        actionable: true,
+        action: 'view_overdue_tasks'
+      });
+    }
     
     if (totalTasks > 0) {
       const completionRate = completedTasks / totalTasks;
@@ -233,7 +188,9 @@ router.get('/suggestions', authenticateJWT, async (req, res) => {
         suggestions.push({
           type: 'productivity',
           message: 'Your task completion rate is below 50% this week. Consider using time-blocking or the Pomodoro technique.',
-          priority: 'medium'
+          priority: 'medium',
+          actionable: true,
+          action: 'start_pomodoro'
         });
       } else if (completionRate > 0.8) {
         suggestions.push({
@@ -243,40 +200,21 @@ router.get('/suggestions', authenticateJWT, async (req, res) => {
         });
       }
     }
-
-    // Try to get AI-powered suggestions
-    try {
-      const aiSuggestions = await aiClient.getSuggestions(targetUserId, context);
-      if (aiSuggestions && aiSuggestions.suggestions) {
-        suggestions.push(...aiSuggestions.suggestions);
-      }
-    } catch (aiError) {
-      logger.warn('AI suggestions unavailable, using basic suggestions', {
-        error: aiError.message
-      });
-    }
     
-    // General productivity tip if no suggestions
-    if (suggestions.length === 0) {
-      suggestions.push({
-        type: 'productivity',
-        message: 'Consider reviewing your tasks at the start of each day to prioritize effectively.',
-        priority: 'low'
-      });
-    }
-    
-    logger.info('Suggestions generated', {
-      userId: targetUserId,
-      suggestionCount: suggestions.length
-    });
+    logger.info('AI suggestions retrieved', { suggestionCount: suggestions.length });
     
     res.json({
       message: 'AI suggestions retrieved',
       suggestions,
-      context
+      context,
+      stats: {
+        totalTasks: userTasks.length,
+        overdueTasks: overdueTasks.length,
+        completionRate: totalTasks > 0 ? completedTasks / totalTasks : 0
+      }
     });
   } catch (err) {
-    logger.error('Failed to get suggestions', { error: err.message });
+    logger.error('Failed to get AI suggestions', { error: err.message });
     res.status(500).json({ message: 'Failed to get AI suggestions', error: err.message });
   }
 });
@@ -287,32 +225,23 @@ router.post('/analyze-performance', authenticateJWT, async (req, res) => {
     const { userId, timeframe, metrics } = req.body;
     const targetUserId = userId || req.user._id;
     
-    logger.info('AI performance analysis requested', {
-      userId: targetUserId,
-      timeframe
-    });
-
-    // Call AI service for performance analysis
+    logger.info('AI performance analysis requested', { userId: targetUserId, timeframe });
+    
+    // Get AI-powered performance analysis
     const aiAnalysis = await aiClient.analyzePerformance(targetUserId, timeframe, metrics);
     
-    // Get performance score from AI
-    let performanceScore = null;
-    try {
-      performanceScore = await aiClient.getPerformanceScore(targetUserId);
-    } catch (scoreError) {
-      logger.warn('Could not get AI performance score', { error: scoreError.message });
-    }
-
+    // Get performance score with burnout detection
+    const performanceScore = await aiClient.getPerformanceScore(targetUserId);
+    
+    // Combine results
     const analysis = {
       ...aiAnalysis.analysis,
       performanceScore: performanceScore,
-      aiPowered: true
+      burnoutRisk: performanceScore.burnout_risk || false,
+      burnoutProbability: performanceScore.burnout_probability || 0
     };
     
-    logger.info('Performance analysis completed', {
-      userId: targetUserId,
-      productivityScore: analysis.productivityScore
-    });
+    logger.info('Performance analysis completed', { userId: targetUserId });
     
     res.json({
       message: 'Performance analysis completed',
@@ -325,35 +254,35 @@ router.post('/analyze-performance', authenticateJWT, async (req, res) => {
   }
 });
 
-// Get AI Performance Scores
-router.get('/performance-scores', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
+// Get AI Performance Score
+router.get('/performance-score/:userId?', authenticateJWT, async (req, res) => {
   try {
-    logger.info('AI performance scores requested');
-
-    const scores = await aiClient.getPerformanceScores();
+    const userId = req.params.userId || req.user._id;
+    
+    logger.info('Performance score requested', { userId });
+    
+    const performanceScore = await aiClient.getPerformanceScore(userId);
     
     res.json({
-      message: 'Performance scores retrieved',
-      scores,
-      aiPowered: true
+      message: 'Performance score retrieved',
+      performanceScore
     });
   } catch (err) {
-    logger.error('Failed to get performance scores', { error: err.message });
-    res.status(500).json({ message: 'Failed to get performance scores', error: err.message });
+    logger.error('Failed to get performance score', { error: err.message });
+    res.status(500).json({ message: 'Failed to get performance score', error: err.message });
   }
 });
 
-// Get AI Weekly Report
-router.get('/weekly-report', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
+// Get Weekly AI Report
+router.get('/report/weekly', authenticateJWT, async (req, res) => {
   try {
-    logger.info('AI weekly report requested');
-
+    logger.info('Weekly AI report requested');
+    
     const report = await aiClient.getWeeklyReport();
     
     res.json({
       message: 'Weekly report retrieved',
-      report,
-      aiPowered: true
+      report
     });
   } catch (err) {
     logger.error('Failed to get weekly report', { error: err.message });
@@ -361,19 +290,69 @@ router.get('/weekly-report', authenticateJWT, authorizeRoles('admin', 'manager')
   }
 });
 
-// Train AI Models
+// Prioritize Tasks
+router.post('/prioritize', authenticateJWT, async (req, res) => {
+  try {
+    const { tasks } = req.body;
+    
+    logger.info('Task prioritization requested', { taskCount: tasks.length });
+    
+    const prioritized = await aiClient.prioritizeTasks(tasks);
+    
+    res.json({
+      message: 'Tasks prioritized',
+      prioritizedTasks: prioritized.prioritized_tasks
+    });
+  } catch (err) {
+    logger.error('Task prioritization failed', { error: err.message });
+    res.status(500).json({ message: 'Task prioritization failed', error: err.message });
+  }
+});
+
+// Get Anomalies
+router.get('/analytics/anomalies', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
+  try {
+    logger.info('Anomalies requested');
+    
+    const anomalies = await aiClient.getAnomalies();
+    
+    res.json({
+      message: 'Anomalies retrieved',
+      anomalies
+    });
+  } catch (err) {
+    logger.error('Failed to get anomalies', { error: err.message });
+    res.status(500).json({ message: 'Failed to get anomalies', error: err.message });
+  }
+});
+
+// Get Performance Trends
+router.get('/analytics/trends', authenticateJWT, async (req, res) => {
+  try {
+    logger.info('Performance trends requested');
+    
+    const trends = await aiClient.getTrends();
+    
+    res.json({
+      message: 'Trends retrieved',
+      trends
+    });
+  } catch (err) {
+    logger.error('Failed to get trends', { error: err.message });
+    res.status(500).json({ message: 'Failed to get trends', error: err.message });
+  }
+});
+
+// Train Models (Admin only)
 router.post('/train-models', authenticateJWT, authorizeRoles('admin'), async (req, res) => {
   try {
-    logger.info('AI model training requested', { requestedBy: req.user._id });
-
-    const result = await aiClient.trainModels();
+    logger.info('Model training initiated by admin', { userId: req.user._id });
     
-    logger.info('AI model training completed', result);
+    const result = await aiClient.trainModels();
     
     res.json({
       message: 'Model training completed',
-      result,
-      aiPowered: true
+      result
     });
   } catch (err) {
     logger.error('Model training failed', { error: err.message });
@@ -381,8 +360,38 @@ router.post('/train-models', authenticateJWT, authorizeRoles('admin'), async (re
   }
 });
 
-// Get AI Health Status
-router.get('/health', authenticateJWT, async (req, res) => {
+// Get Model Drift Report (Admin only)
+router.get('/monitoring/drift-report', authenticateJWT, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const report = await aiClient.getDriftReport();
+    
+    res.json({
+      message: 'Drift report retrieved',
+      report
+    });
+  } catch (err) {
+    logger.error('Failed to get drift report', { error: err.message });
+    res.status(500).json({ message: 'Failed to get drift report', error: err.message });
+  }
+});
+
+// Get Model Performance (Admin only)
+router.get('/monitoring/performance', authenticateJWT, authorizeRoles('admin'), async (req, res) => {
+  try {
+    const performance = await aiClient.getModelPerformance();
+    
+    res.json({
+      message: 'Model performance retrieved',
+      performance
+    });
+  } catch (err) {
+    logger.error('Failed to get model performance', { error: err.message });
+    res.status(500).json({ message: 'Failed to get model performance', error: err.message });
+  }
+});
+
+// Health Check
+router.get('/health', async (req, res) => {
   try {
     const health = await aiClient.healthCheck();
     
@@ -391,15 +400,12 @@ router.get('/health', authenticateJWT, async (req, res) => {
       health
     });
   } catch (err) {
-    res.status(500).json({ 
-      message: 'AI service health check failed', 
+    res.status(503).json({ 
+      message: 'AI service unavailable', 
       error: err.message,
-      health: {
-        status: 'error',
-        connected: false
-      }
+      healthy: false
     });
   }
 });
 
-module.exports = router; 
+module.exports = router;
