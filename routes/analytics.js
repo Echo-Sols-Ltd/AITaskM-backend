@@ -3,6 +3,10 @@ const router = express.Router();
 const Task = require('../models/Task');
 const User = require('../models/User');
 const { authenticateJWT, authorizeRoles } = require('../middleware/auth');
+const aiClient = require('../utils/aiClient');
+const Logger = require('../utils/logger');
+
+const logger = new Logger('ANALYTICS');
 
 // GET /api/analytics/overview - Get overview statistics
 router.get('/overview', authenticateJWT, async (req, res) => {
@@ -54,6 +58,21 @@ router.get('/overview', authenticateJWT, async (req, res) => {
     // Get active users count
     const activeUsers = await User.countDocuments({ isActive: true });
 
+    // Get AI insights
+    let aiInsights = null;
+    try {
+      const anomalies = await aiClient.getAnomalies();
+      const trends = await aiClient.getTrends();
+      
+      aiInsights = {
+        anomalies: anomalies.global_anomalous_durations || [],
+        trends: trends,
+        hasAnomalies: (anomalies.global_anomalous_durations || []).length > 0
+      };
+    } catch (aiError) {
+      logger.warn('AI insights unavailable for overview', { error: aiError.message });
+    }
+
     res.json({
       overview: {
         totalTasks,
@@ -65,7 +84,8 @@ router.get('/overview', authenticateJWT, async (req, res) => {
         activeUsers
       },
       priorityDistribution,
-      statusDistribution
+      statusDistribution,
+      aiInsights
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch analytics', error: err.message });
@@ -142,8 +162,24 @@ router.get('/trends', authenticateJWT, async (req, res) => {
       trendData[date].created += stat.count;
     });
 
+    // Get AI-powered trend predictions
+    let aiTrends = null;
+    try {
+      aiTrends = await aiClient.getTrends();
+    } catch (aiError) {
+      logger.warn('AI trends unavailable', { error: aiError.message });
+    }
+
     res.json({
-      trends: Object.values(trendData)
+      trends: Object.values(trendData),
+      aiTrends,
+      predictions: aiTrends ? {
+        nextWeekProductivity: 'stable', // Could be enhanced with actual predictions
+        recommendedActions: [
+          'Current trend is positive',
+          'Maintain current workload distribution'
+        ]
+      } : null
     });
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch trends', error: err.message });
@@ -283,7 +319,31 @@ router.get('/user-productivity', authenticateJWT, authorizeRoles('admin', 'manag
       { $sort: { completionRate: -1 } }
     ]);
 
-    res.json({ userProductivity });
+    // Enhance with AI performance scores
+    const enhancedProductivity = await Promise.all(
+      userProductivity.map(async (user) => {
+        try {
+          const performanceScore = await aiClient.getPerformanceScore(user.userId);
+          return {
+            ...user,
+            aiPerformanceScore: performanceScore,
+            burnoutRisk: performanceScore.burnout_risk || false,
+            aiRecommendation: performanceScore.recommendation
+          };
+        } catch (aiError) {
+          logger.warn('AI performance score unavailable for user', { 
+            userId: user.userId, 
+            error: aiError.message 
+          });
+          return user;
+        }
+      })
+    );
+
+    res.json({ 
+      userProductivity: enhancedProductivity,
+      aiEnhanced: true
+    });
   } catch (err) {
     res.status(500).json({ message: 'Failed to fetch user productivity', error: err.message });
   }
