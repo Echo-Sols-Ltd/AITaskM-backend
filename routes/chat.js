@@ -390,6 +390,29 @@ router.post('/messages/:id/read', authenticateJWT, async (req, res) => {
   }
 });
 
+// Get unread count for a conversation
+router.get('/conversations/:id/unread-count', authenticateJWT, async (req, res) => {
+  try {
+    const conversationId = req.params.id;
+    
+    // Count unread messages in this conversation
+    const unreadCount = await ChatMessage.countDocuments({
+      conversation: conversationId,
+      'readBy.user': { $ne: req.user._id },
+      sender: { $ne: req.user._id }, // Don't count own messages
+      isDeleted: false
+    });
+
+    res.json({
+      success: true,
+      conversationId,
+      unreadCount
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to get unread count', error: err.message });
+  }
+});
+
 // Mark all messages in conversation as read
 router.post('/conversations/:id/read', authenticateJWT, async (req, res) => {
   try {
