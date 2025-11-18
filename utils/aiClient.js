@@ -1,5 +1,7 @@
 const axios = require('axios');
 const Logger = require('./logger');
+const redisCache = require('./redisCache');
+const { aiRequestQueue } = require('./requestQueue');
 
 const logger = new Logger('AI_CLIENT');
 
@@ -8,8 +10,9 @@ class AIClient {
     this.baseURL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
     this.timeout = parseInt(process.env.AI_SERVICE_TIMEOUT) || 30000;
     this.retryAttempts = parseInt(process.env.AI_SERVICE_RETRY_ATTEMPTS) || 3;
-    this.cache = new Map();
+    this.cache = new Map(); // Fallback in-memory cache
     this.cacheTimeout = 5 * 60 * 1000; // 5 minutes
+    this.useRedis = process.env.REDIS_URL ? true : false;
     
     this.client = axios.create({
       baseURL: this.baseURL,
@@ -66,14 +69,38 @@ class AIClient {
    * Get cache key for request
    */
   getCacheKey(operation, ...args) {
-    return `${operation}:${JSON.stringify(args)}`;
+    return `ai:${operation}:${JSON.stringify(args)}`;
   }
 
   /**
-   * Check if cache is valid
+   * Get from cache (Redis or memory)
    */
-  isCacheValid(cacheEntry) {
-    return cacheEntry && (Date.now() - cacheEntry.timestamp) < this.cacheTimeout;
+  async getFromCache(key) {
+    if (this.useRedis) {
+      return await redisCache.get(key);
+    }
+    
+    // Fallback to memory cache
+    const cached = this.cache.get(key);
+    if (cached && (Date.now() - cached.timestamp) < this.cacheTimeout) {
+      return cached.data;
+    }
+    return null;
+  }
+
+  /**
+   * Set in cache (Redis or memory)
+   */
+  async setInCache(key, value, ttl = 300) {
+    if (this.useRedis) {
+      await redisCache.set(key, value, ttl);
+    } else {
+      // Fallback to memory cache
+      this.cache.set(key, {
+        data: value,
+        timestamp: Date.now()
+      });
+    }
   }
 
   /**
@@ -102,14 +129,16 @@ class AIClient {
    */
   async assignTasks(tasks, employees, criteria = {}) {
     const cacheKey = this.getCacheKey('assign', tasks, employees);
-    const cached = this.cache.get(cacheKey);
+    const cached = await this.getFromCache(cacheKey);
     
-    if (this.isCacheValid(cached)) {
+    if (cached) {
       logger.debug('Returning cached AI assignment result');
-      return cached.data;
+      return cached;
     }
 
-    try {
+    // Use request queue for AI calls
+    return await aiRequestQueue.enqueue(async () => {
+      try {
       const payload = {
         tasks: tasks.map(task => ({
           task_id: task._id || task.id,
@@ -133,19 +162,17 @@ class AIClient {
         criteria
       };
 
-      const result = await this.callWithRetry('/api/ai/assign-tasks', payload);
-      
-      // Cache the result
-      this.cache.set(cacheKey, {
-        data: result,
-        timestamp: Date.now()
-      });
+        const result = await this.callWithRetry('/api/ai/assign-tasks', payload);
+        
+        // Cache the result
+        await this.setInCache(cacheKey, result, 300);
 
-      return result;
-    } catch (error) {
-      logger.error('AI task assignment failed, using fallback', { error: error.message });
-      return this.fallbackAssignment(tasks, employees);
-    }
+        return result;
+      } catch (error) {
+        logger.error('AI task assignment failed, using fallback', { error: error.message });
+        return this.fallbackAssignment(tasks, employees);
+      }
+    }, 2); // Priority 2 for task assignment
   }
 
   /**
@@ -382,9 +409,27 @@ class AIClient {
   /**
    * Clear cache
    */
-  clearCache() {
-    this.cache.clear();
+  async clearCache() {
+    if (this.useRedis) {
+      await redisCache.delPattern('ai:*');
+    } else {
+      this.cache.clear();
+    }
     logger.info('AI Client cache cleared');
+  }
+
+  /**
+   * Get cache statistics
+   */
+  async getCacheStats() {
+    if (this.useRedis) {
+      return await redisCache.getStats();
+    }
+    return {
+      type: 'memory',
+      size: this.cache.size,
+      maxAge: this.cacheTimeout
+    };
   }
 }
 

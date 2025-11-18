@@ -6,11 +6,12 @@ const User = require('../models/User');
 const aiClient = require('../utils/aiClient');
 const { emitToUser, emitNotification } = require('../socket');
 const Logger = require('../utils/logger');
+const { aiLimiter, strictLimiter } = require('../middleware/rateLimiter');
 
 const logger = new Logger('AI_ROUTES');
 
 // AI Task Assignment
-router.post('/assign-tasks', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
+router.post('/assign-tasks', aiLimiter, authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
   try {
     const { tasks, teamMembers, criteria } = req.body;
     
@@ -344,7 +345,7 @@ router.get('/analytics/trends', authenticateJWT, async (req, res) => {
 });
 
 // Train Models (Admin only)
-router.post('/train-models', authenticateJWT, authorizeRoles('admin'), async (req, res) => {
+router.post('/train-models', strictLimiter, authenticateJWT, authorizeRoles('admin'), async (req, res) => {
   try {
     logger.info('Model training initiated by admin', { userId: req.user._id });
     
