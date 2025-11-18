@@ -3,8 +3,8 @@ const router = express.Router();
 const User = require('../models/User');
 const { authenticateJWT, authorizeRoles } = require('../middleware/auth');
 
-// Get all users (Admin/Manager only)
-router.get('/', authenticateJWT, authorizeRoles('admin', 'manager'), async (req, res) => {
+// Get all users (All authenticated users can see basic user list for messaging)
+router.get('/', authenticateJWT, async (req, res) => {
   try {
     const { limit = 50, page = 1, role, search } = req.query;
     
@@ -23,8 +23,14 @@ router.get('/', authenticateJWT, authorizeRoles('admin', 'manager'), async (req,
       ];
     }
     
+    // Regular users can only see basic info, admins/managers see more details
+    const isAdminOrManager = ['admin', 'manager', 'employer'].includes(req.user.role);
+    const selectFields = isAdminOrManager 
+      ? 'name email role avatar department team status'
+      : 'name email role avatar'; // Limited fields for regular users
+    
     const users = await User.find(filter)
-      .select('name email role avatar department team status')
+      .select(selectFields)
       .populate('team', 'name')
       .limit(parseInt(limit))
       .skip((parseInt(page) - 1) * parseInt(limit))
