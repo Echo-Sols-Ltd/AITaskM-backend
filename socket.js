@@ -74,6 +74,12 @@ function initializeSocket(server) {
       console.log(`💬 User ${socket.userId} joined chat room: ${conversationId}`);
     });
 
+    // Handle joining conversation (alias for join-chat)
+    socket.on('join-conversation', (conversationId) => {
+      socket.join(`chat:${conversationId}`);
+      console.log(`💬 User ${socket.userId} joined conversation: ${conversationId}`);
+    });
+
     // Handle task updates
     socket.on('task-update', (task) => {
       // Broadcast to all users in the task's team
@@ -113,24 +119,49 @@ function initializeSocket(server) {
     // Handle chat messages
     socket.on('send-message', ({ conversationId, message, attachments }) => {
       const messageData = {
-        id: Date.now().toString(),
-        senderId: socket.userId,
-        conversationId,
-        message,
+        _id: Date.now().toString(),
+        sender: {
+          _id: socket.userId,
+          name: 'User' // This should come from the user object
+        },
+        conversation: conversationId,
+        content: message,
         attachments,
-        timestamp: new Date()
+        type: attachments && attachments.length > 0 ? 'file' : 'text',
+        createdAt: new Date()
       };
       
-      // Broadcast to all users in the conversation
-      io.to(`chat:${conversationId}`).emit('message', messageData);
+      // Broadcast to all users in the conversation including sender
+      io.to(`chat:${conversationId}`).emit('new-message', messageData);
     });
 
     // Handle typing indicators
     socket.on('typing', ({ conversationId, isTyping }) => {
       socket.to(`chat:${conversationId}`).emit('typing', {
         userId: socket.userId,
+        userName: 'User', // This should come from the user object
+        conversationId,
         isTyping
       });
+    });
+
+    // Handle message reactions
+    socket.on('add-reaction', ({ messageId, emoji, conversationId }) => {
+      const reactionData = {
+        messageId,
+        reaction: {
+          emoji,
+          userId: socket.userId,
+          userName: 'User' // This should come from the user object
+        }
+      };
+      
+      io.to(`chat:${conversationId}`).emit('reaction-added', reactionData);
+    });
+
+    // Handle message deletion
+    socket.on('delete-message', ({ messageId, conversationId }) => {
+      io.to(`chat:${conversationId}`).emit('message-deleted', { messageId });
     });
 
     // Handle disconnect

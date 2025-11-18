@@ -8,7 +8,6 @@ const swaggerUi = require('swagger-ui-express');
 const swaggerDocument = require('./swagger.json');
 const cors = require('cors');
 const http = require('http');
-const socketIo = require('socket.io');
 const Logger = require('./utils/logger');
 
 // Route imports
@@ -41,12 +40,6 @@ logger.info('Starting MoveIt Task Manager Backend');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
-    methods: ["GET", "POST"]
-  }
-});
 
 logger.info('Express server initialized');
 
@@ -90,11 +83,7 @@ mongoose.connect(process.env.MONGODB_URI)
     process.exit(1);
   });
 
-// WebSocket middleware
-app.use((req, res, next) => {
-  req.io = io;
-  next();
-});
+// WebSocket middleware will be added after socket initialization in server.js
 
 // API Routes
 logger.info('Registering API routes');
@@ -125,62 +114,6 @@ logger.info('All routes registered successfully');
 // Swagger documentation
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
-// WebSocket connection handling
-const wsLogger = new Logger('WEBSOCKET');
-
-io.on('connection', (socket) => {
-  wsLogger.info('User connected', { socketId: socket.id });
-  
-  // Join user to their personal room
-  socket.on('join-user', (userId) => {
-    socket.join(`user-${userId}`);
-    wsLogger.info('User joined personal room', { userId, socketId: socket.id });
-  });
-  
-  // Join team room
-  socket.on('join-team', (teamId) => {
-    socket.join(`team-${teamId}`);
-    wsLogger.info('User joined team room', { teamId, socketId: socket.id });
-  });
-  
-  // Join department room
-  socket.on('join-department', (departmentId) => {
-    socket.join(`department-${departmentId}`);
-    wsLogger.info('User joined department room', { departmentId, socketId: socket.id });
-  });
-
-  // ===== REAL-TIME ENDPOINTS =====
-  
-  // WS /ws/notifications - Real-time notifications
-  socket.on('join-notifications', (userId) => {
-    socket.join(`notifications-${userId}`);
-    wsLogger.info('User joined notifications room', { userId, socketId: socket.id });
-  });
-
-  // WS /ws/chat - Real-time chat
-  socket.on('join-chat', (conversationId) => {
-    socket.join(`chat-${conversationId}`);
-    wsLogger.info('User joined chat room', { conversationId, socketId: socket.id });
-  });
-
-  // WS /ws/tasks - Real-time task updates
-  socket.on('join-tasks', (userId) => {
-    socket.join(`tasks-${userId}`);
-    wsLogger.info('User joined tasks room', { userId, socketId: socket.id });
-  });
-
-  // WS /ws/analytics - Real-time analytics
-  socket.on('join-analytics', (userId) => {
-    socket.join(`analytics-${userId}`);
-    wsLogger.info('User joined analytics room', { userId, socketId: socket.id });
-  });
-
-  // Handle real-time events
-  socket.on('disconnect', () => {
-    wsLogger.info('User disconnected', { socketId: socket.id });
-  });
-});
-
 // Error logging middleware
 app.use(Logger.errorLogger());
 
@@ -207,4 +140,4 @@ app.use('*', (req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
 
-module.exports = { app, server, io };
+module.exports = { app, server };
