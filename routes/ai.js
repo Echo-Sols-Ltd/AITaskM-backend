@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const { authenticateJWT, authorizeRoles } = require('../middleware/auth');
 const Task = require('../models/Task');
-const User = require('../models/User');
 const aiClient = require('../utils/aiClient');
 const { emitToUser, emitNotification } = require('../socket');
 const Logger = require('../utils/logger');

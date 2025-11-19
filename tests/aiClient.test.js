@@ -1,4 +1,4 @@
-const aiClient = require('../utils/aiClient');
+import aiClient from "../utils/aiClient.js";
 
 describe('AI Client', () => {
   describe('Health Check', () => {

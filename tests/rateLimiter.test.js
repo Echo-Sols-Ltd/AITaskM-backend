@@ -1,6 +1,6 @@
-const request = require('supertest');
-const express = require('express');
-const { createRateLimiter } = require('../middleware/rateLimiter');
+import { request } from "express";
+import express from 'express';
+import { createRateLimiter } from "../middleware/rateLimiter";
 
 describe('Rate Limiter', () => {
   let app;

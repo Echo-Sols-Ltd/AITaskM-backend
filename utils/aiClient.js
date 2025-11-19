@@ -7,7 +7,8 @@ const logger = new Logger('AI_CLIENT');
 
 class AIClient {
   constructor() {
-    this.baseURL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+    this.baseURL = process.env.AI_SERVICE_URL || 'http://127.0.0.1:8000';
+    console.log(this.baseURL)
     this.timeout = parseInt(process.env.AI_SERVICE_TIMEOUT) || 30000;
     this.retryAttempts = parseInt(process.env.AI_SERVICE_RETRY_ATTEMPTS) || 3;
     this.cache = new Map(); // Fallback in-memory cache
