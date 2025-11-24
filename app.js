@@ -49,12 +49,36 @@ logger.info('Configuring middleware');
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 app.use(helmet());
-app.use(cors({
-  origin: process.env.CLIENT_URL || "https://ai-task-m-web.vercel.app",
+
+// CORS Configuration
+// WARNING: Accepting all origins (*) is NOT recommended for production
+// For production, specify exact origins in CLIENT_URL environment variable
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    // If CLIENT_URL is set, use it; otherwise allow all origins
+    if (process.env.CLIENT_URL) {
+      const allowedOrigins = process.env.CLIENT_URL.split(',').map(url => url.trim());
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    } else {
+      // Allow all origins (development/testing only)
+      callback(null, true);
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-}));
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 600 // Cache preflight request for 10 minutes
+};
+
+app.use(cors(corsOptions));
 
 // Request logging
 app.use(Logger.requestLogger());
