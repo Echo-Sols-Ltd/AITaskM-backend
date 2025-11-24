@@ -34,19 +34,40 @@ A comprehensive Node.js backend for the AI-powered task management system with g
 
 ## 🚀 Quick Start
 
-### 1. Clone and Install Dependencies
+### Option 1: Docker (Recommended)
+
+The fastest way to get started:
 
 ```bash
-cd ai-task-manager
+# Copy environment file
+cp .env.docker .env
+
+# Edit .env with your configuration
+# Then deploy with Docker
+bash deploy.sh
+```
+
+✅ **Done!** Backend is running at http://localhost:5000
+
+📚 **Docker Documentation**:
+- [Quick Start Guide](./DOCKER_QUICKSTART.md) - Get running in 5 minutes
+- [Full Docker Guide](./DOCKER_README.md) - Complete Docker documentation
+
+### Option 2: Local Development
+
+#### 1. Clone and Install Dependencies
+
+```bash
+cd backend
 npm install
 ```
 
-### 2. Environment Configuration
+#### 2. Environment Configuration
 
 Copy the environment example file and configure your settings:
 
 ```bash
-cp env.example .env
+cp .env.example .env
 ```
 
 Edit `.env` with your configuration:

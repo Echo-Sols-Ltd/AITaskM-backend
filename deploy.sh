@@ -206,4 +206,24 @@ case "${1:-deploy}" in
         ;;
     restart)
         print_info "Restarting services..."
-   
+        docker-compose restart
+        print_success "Services restarted"
+        ;;
+    logs)
+        docker-compose logs -f
+        ;;
+    health)
+        check_health
+        ;;
+    clean)
+        print_warning "This will remove all containers and volumes!"
+        print_info "Press Enter to continue or Ctrl+C to cancel..."
+        read
+        docker-compose down -v
+        print_success "Cleanup completed"
+        ;;
+    *)
+        echo "Usage: $0 {deploy|stop|restart|logs|health|clean}"
+        exit 1
+        ;;
+esac
