@@ -57,20 +57,8 @@ const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
-    
-    // If CLIENT_URL is set, use it; otherwise allow all origins
-    if (process.env.CLIENT_URL) {
-      const allowedOrigins = process.env.CLIENT_URL.split(',').map(url => url.trim());
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    } else {
-      // Allow all origins (development/testing only)
-      callback(null, true);
-    }
-  },
+    callback(null, true);
+},
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
@@ -161,8 +149,8 @@ app.use((err, req, res, next) => {
     path: req.path,
     method: req.method
   });
-  
-  res.status(err.status || 500).json({ 
+
+  res.status(err.status || 500).json({
     message: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
