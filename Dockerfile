@@ -8,13 +8,23 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production
+# Generate package-lock.json if missing, then use npm ci for reproducible builds
+RUN if [ ! -f package-lock.json ]; then \
+      echo "⚠️  package-lock.json not found, generating..."; \
+      npm install --package-lock-only; \
+    fi && \
+    npm ci --omit=dev && \
+    npm cache clean --force
 
 # Copy application code
 COPY . .
 
-# Create uploads directory
-RUN mkdir -p uploads logs
+# Create required directories
+RUN mkdir -p uploads logs && \
+    chown -R node:node /app
+
+# Switch to non-root user for security
+USER node
 
 # Expose port
 EXPOSE 5000
