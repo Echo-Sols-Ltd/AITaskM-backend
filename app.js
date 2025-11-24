@@ -85,6 +85,17 @@ mongoose.connect(process.env.MONGODB_URI)
 
 // WebSocket middleware will be added after socket initialization in server.js
 
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  const healthcheck = {
+    uptime: process.uptime(),
+    message: 'OK',
+    timestamp: Date.now(),
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+  };
+  res.status(200).json(healthcheck);
+});
+
 // API Routes
 logger.info('Registering API routes');
 

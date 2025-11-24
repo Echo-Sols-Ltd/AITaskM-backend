@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: ai-task-manager-mongodb-dev
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: ai-task-manager
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data_dev:/data/db
+    networks:
+      - app-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: ai-task-manager-redis-dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    command: redis-server --appendonly yes
+
+  # Backend API (Development)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: ai-task-manager-backend-dev
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+      - "9229:9229"  # Node.js debugger port
+    environment:
+      - NODE_ENV=development
+      - PORT=5000
+      - MONGODB_URI=mongodb://mongodb:27017/ai-task-manager
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=dev-secret-key
+      - JWT_EXPIRES_IN=7d
+      - CLIENT_URL=http://localhost:3000
+      - AI_SERVICE_URL=http://host.docker.internal:8000
+      - AI_SERVICE_TIMEOUT=30000
+      - AI_SERVICE_RETRY_ATTEMPTS=3
+      - AI_ENABLE_MONITORING=true
+      - LOG_LEVEL=debug
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    networks:
+      - app-network
+    depends_on:
+      - mongodb
+      - redis
+    command: npm run dev
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mongodb_data_dev:
+    driver: local

@@ -7,8 +7,6 @@ services:
     container_name: ai-task-manager-mongodb
     restart: unless-stopped
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: admin123
       MONGO_INITDB_DATABASE: ai-task-manager
     ports:
       - "27017:27017"
@@ -16,9 +14,9 @@ services:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb
     networks:
-      - ai-task-manager-network
+      - app-network
     healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/ai-task-manager --quiet
       interval: 10s
       timeout: 5s
       retries: 5
@@ -33,11 +31,11 @@ services:
     volumes:
       - redis_data:/data
     networks:
-      - ai-task-manager-network
+      - app-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
-      timeout: 5s
+      timeout: 3s
       retries: 5
     command: redis-server --appendonly yes
 
@@ -46,38 +44,36 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: production
     container_name: ai-task-manager-backend
     restart: unless-stopped
     ports:
       - "5000:5000"
     environment:
-      NODE_ENV: production
-      PORT: 5000
-      MONGODB_URI: mongodb://admin:admin123@mongodb:27017/ai-task-manager?authSource=admin
-      REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
-      JWT_EXPIRES_IN: 7d
-      CLIENT_URL: ${CLIENT_URL:-http://localhost:3000}
-      AI_SERVICE_URL: ${AI_SERVICE_URL:-http://ai-service:8000}
-      AI_SERVICE_TIMEOUT: 30000
-      AI_SERVICE_RETRY_ATTEMPTS: 3
-      AI_ENABLE_MONITORING: true
-      RATE_LIMIT_WINDOW_MS: 900000
-      RATE_LIMIT_MAX_REQUESTS: 100
-      BCRYPT_ROUNDS: 10
-      LOG_LEVEL: info
-      MAX_FILE_SIZE: 10485760
+      - NODE_ENV=production
+      - PORT=5000
+      - MONGODB_URI=mongodb://mongodb:27017/ai-task-manager
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:-your-super-secret-jwt-key-change-in-production}
+      - JWT_EXPIRES_IN=7d
+      - CLIENT_URL=${CLIENT_URL:-http://localhost:3000}
+      - AI_SERVICE_URL=${AI_SERVICE_URL:-http://ai-service:8000}
+      - AI_SERVICE_TIMEOUT=30000
+      - AI_SERVICE_RETRY_ATTEMPTS=3
+      - AI_ENABLE_MONITORING=true
+      - RATE_LIMIT_WINDOW_MS=900000
+      - RATE_LIMIT_MAX_REQUESTS=100
+      - BCRYPT_ROUNDS=10
+      - LOG_LEVEL=info
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
+    networks:
+      - app-network
     depends_on:
       mongodb:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks:
-      - ai-task-manager-network
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
       interval: 30s
@@ -85,50 +81,8 @@ services:
       retries: 3
       start_period: 40s
 
-  # Backend Development (optional)
-  backend-dev:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: development
-    container_name: ai-task-manager-backend-dev
-    restart: unless-stopped
-    ports:
-      - "5001:5000"
-    environment:
-      NODE_ENV: development
-      PORT: 5000
-      MONGODB_URI: mongodb://admin:admin123@mongodb:27017/ai-task-manager?authSource=admin
-      REDIS_URL: redis://redis:6379
-      JWT_SECRET: dev-secret-key
-      JWT_EXPIRES_IN: 7d
-      CLIENT_URL: http://localhost:3000
-      AI_SERVICE_URL: http://localhost:8000
-      AI_SERVICE_TIMEOUT: 30000
-      AI_SERVICE_RETRY_ATTEMPTS: 3
-      AI_ENABLE_MONITORING: true
-      RATE_LIMIT_WINDOW_MS: 900000
-      RATE_LIMIT_MAX_REQUESTS: 100
-      BCRYPT_ROUNDS: 10
-      LOG_LEVEL: debug
-      MAX_FILE_SIZE: 10485760
-    volumes:
-      - .:/app
-      - /app/node_modules
-      - ./uploads:/app/uploads
-      - ./logs:/app/logs
-    depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - ai-task-manager-network
-    profiles:
-      - dev
-
 networks:
-  ai-task-manager-network:
+  app-network:
     driver: bridge
 
 volumes:

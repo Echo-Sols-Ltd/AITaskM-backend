@@ -1,0 +1,97 @@
+.PHONY: help build up down restart logs shell clean health backup restore
+
+# Default target
+help:
+	@echo "AI Task Manager Backend - Docker Commands"
+	@echo ""
+	@echo "Usage: make [target]"
+	@echo ""
+	@echo "Targets:"
+	@echo "  build      - Build Docker images"
+	@echo "  up         - Start all services"
+	@echo "  down       - Stop all services"
+	@echo "  restart    - Restart all services"
+	@echo "  logs       - View logs (all services)"
+	@echo "  logs-backend - View backend logs only"
+	@echo "  shell      - Access backend container shell"
+	@echo "  health     - Check service health"
+	@echo "  clean      - Remove containers and volumes"
+	@echo "  backup     - Backup MongoDB data"
+	@echo "  restore    - Restore MongoDB data"
+	@echo "  ps         - Show running containers"
+	@echo "  stats      - Show container resource usage"
+
+# Build images
+build:
+	docker-compose build
+
+# Start services
+up:
+	docker-compose up -d
+	@echo "Services started. Check status with 'make ps'"
+
+# Stop services
+down:
+	docker-compose down
+
+# Restart services
+restart:
+	docker-compose restart
+
+# View logs
+logs:
+	docker-compose logs -f
+
+# View backend logs only
+logs-backend:
+	docker-compose logs -f backend
+
+# Access backend shell
+shell:
+	docker-compose exec backend sh
+
+# Check health
+health:
+	@echo "Checking backend health..."
+	@curl -s http://localhost:5000/api/health | json_pp || echo "Backend not responding"
+	@echo ""
+	@echo "Checking MongoDB..."
+	@docker-compose exec -T mongodb mongosh --quiet --eval "db.adminCommand('ping')" || echo "MongoDB not responding"
+	@echo ""
+	@echo "Checking Redis..."
+	@docker-compose exec -T redis redis-cli ping || echo "Redis not responding"
+
+# Clean up
+clean:
+	docker-compose down -v
+	@echo "All containers and volumes removed"
+
+# Backup MongoDB
+backup:
+	@mkdir -p ./backups
+	@echo "Creating MongoDB backup..."
+	docker-compose exec -T mongodb mongodump --archive > ./backups/mongodb-backup-$$(date +%Y%m%d-%H%M%S).archive
+	@echo "Backup completed: ./backups/"
+
+# Restore MongoDB
+restore:
+	@echo "Available backups:"
+	@ls -lh ./backups/
+	@read -p "Enter backup filename: " backup; \
+	docker-compose exec -T mongodb mongorestore --archive < ./backups/$$backup
+
+# Show running containers
+ps:
+	docker-compose ps
+
+# Show resource usage
+stats:
+	docker stats --no-stream
+
+# Rebuild and restart
+rebuild:
+	docker-compose up -d --build
+
+# View environment
+env:
+	docker-compose exec backend env | grep -E "NODE_ENV|MONGODB|REDIS|AI_SERVICE"
